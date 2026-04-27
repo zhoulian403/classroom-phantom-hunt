@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Classroom Phantom Hunt</title>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      background: #111827;
+    }
+
+    #menu {
+      position: absolute;
+      top: 24px;
+      left: 24px;
+      width: 380px;
+      background: rgba(17, 24, 39, 0.88);
+      color: white;
+      padding: 22px;
+      border-radius: 18px;
+      z-index: 10;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(8px);
+    }
+
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 26px;
+    }
+
+    .subtitle {
+      color: #cbd5e1;
+      font-size: 14px;
+      margin-bottom: 18px;
+    }
+
+    .section-title {
+      font-weight: bold;
+      margin-top: 16px;
+      margin-bottom: 8px;
+      color: #facc15;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      border: none;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    #restartButton {
+      background: #dc2626;
+    }
+
+    #restartButton:hover {
+      background: #b91c1c;
+    }
+
+    .info-box {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      line-height: 1.5;
+    }
+
+    #timer {
+      font-size: 22px;
+      color: #38bdf8;
+      font-weight: bold;
+    }
+
+    #status {
+      color: #ffffff;
+      font-weight: bold;
+    }
+
+    #hint {
+      color: #facc15;
+      font-weight: bold;
+    }
+
+    #instruction {
+      color: #cbd5e1;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="menu">
+    <h1>Classroom Phantom Hunt</h1>
+    <div class="subtitle">
+      A mixed reality hide-and-seek prototype for classroom spaces.
+    </div>
+
+    <div class="section-title">Player A: Choose a hiding place</div>
+
+    <div class="button-row">
+      <button onclick="hideAt('blackboard')">Blackboard</button>
+      <button onclick="hideAt('desk')">Desk</button>
+      <button onclick="hideAt('door')">Door</button>
+      <button id="restartButton" onclick="restartGame()">Restart</button>
+    </div>
+
+    <div class="info-box">
+      <div id="status">Choose a hiding location.</div>
+      <div id="timer">Time: 60</div>
+      <div id="hint">Hint: None</div>
+    </div>
+
+    <div id="instruction">
+      Player B: click the red target on desktop, or select it in VR.
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
