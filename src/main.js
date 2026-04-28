@@ -13,13 +13,18 @@ let hudPanel;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 
-let mode = "hider"; // hider / seeker / finished
+let mode = "hider"; // hider, seeker, finished
 let bunnyPlaced = false;
 let bunnyHidden = false;
 let gameFinished = false;
 
-let triggerStartTime = 0;
 let triggerHolding = false;
+let triggerStartTime = 0;
+let hideAutoConfirmed = false;
+
+let seekerTimeLeft = 60;
+let seekerTimerStarted = false;
+let lastTimerUpdate = 0;
 
 const foundDistance = 0.45;
 
@@ -48,8 +53,8 @@ function init() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test", "local-floor"],
-      optionalFeatures: ["dom-overlay"],
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["local-floor", "dom-overlay"],
       domOverlay: { root: document.body }
     })
   );
@@ -61,8 +66,8 @@ function init() {
   addWorldHUD();
 
   setHUD(
-    "PLAYER A MODE",
-    "Short press trigger to move bunny.\nHold trigger for 2 seconds to hide."
+    "PLAYER A: HIDE",
+    "Look at the floor until the green circle appears.\nShort press trigger to place/move bunny.\nHold trigger for 2 seconds to hide."
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -86,6 +91,7 @@ function addReticle() {
 
   reticle = new THREE.Mesh(geometry, material);
   reticle.rotation.x = -Math.PI / 2;
+  reticle.matrixAutoUpdate = false;
   reticle.visible = false;
 
   scene.add(reticle);
@@ -99,13 +105,10 @@ function addController() {
 
     triggerHolding = true;
     triggerStartTime = performance.now();
+    hideAutoConfirmed = false;
 
     if (mode === "hider") {
-      moveBunnyToReticleOrController();
-      setHUD(
-        "BUNNY MOVED",
-        "Short press again to move.\nHold trigger 2 seconds to hide."
-      );
+      placeBunnyOnReticle();
     }
 
     if (mode === "seeker") {
@@ -114,14 +117,7 @@ function addController() {
   });
 
   controller.addEventListener("selectend", () => {
-    if (!triggerHolding) return;
-
-    const holdTime = performance.now() - triggerStartTime;
     triggerHolding = false;
-
-    if (mode === "hider" && bunnyPlaced && !bunnyHidden && holdTime >= 2000) {
-      confirmHide();
-    }
   });
 
   scene.add(controller);
@@ -140,160 +136,66 @@ function addController() {
   controller.add(line);
 }
 
-function addBunny() {
-  bunny = new THREE.Group();
-
-  const white = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.85
-  });
-
-  const pink = new THREE.MeshStandardMaterial({
-    color: 0xff9eb5,
-    roughness: 0.7
-  });
-
-  const black = new THREE.MeshStandardMaterial({
-    color: 0x111111
-  });
-
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.105, 32, 32), white);
-  body.scale.set(1, 1.15, 0.95);
-  body.position.y = 0.105;
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.095, 32, 32), white);
-  head.position.y = 0.26;
-
-  const earL = createEar(-0.04, white, pink);
-  const earR = createEar(0.04, white, pink);
-
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), black);
-  eyeL.position.set(-0.034, 0.285, 0.085);
-
-  const eyeR = eyeL.clone();
-  eyeR.position.x = 0.034;
-
-  const shineL = new THREE.Mesh(
-    new THREE.SphereGeometry(0.004, 8, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffffff })
-  );
-  shineL.position.set(-0.03, 0.292, 0.094);
-
-  const shineR = shineL.clone();
-  shineR.position.x = 0.039;
-
-  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.009, 16, 16), pink);
-  nose.position.set(0, 0.255, 0.094);
-
-  const blushL = new THREE.Mesh(new THREE.SphereGeometry(0.016, 16, 16), pink);
-  blushL.scale.set(1.2, 0.65, 0.25);
-  blushL.position.set(-0.057, 0.245, 0.084);
-
-  const blushR = blushL.clone();
-  blushR.position.x = 0.057;
-
-  const footL = new THREE.Mesh(new THREE.SphereGeometry(0.033, 16, 16), white);
-  footL.scale.set(1.25, 0.55, 0.9);
-  footL.position.set(-0.045, 0.005, 0.05);
-
-  const footR = footL.clone();
-  footR.position.x = 0.045;
-
-  const tail = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), white);
-  tail.position.set(0, 0.11, -0.095);
-
-  bunny.add(
-    body,
-    head,
-    earL,
-    earR,
-    eyeL,
-    eyeR,
-    shineL,
-    shineR,
-    nose,
-    blushL,
-    blushR,
-    footL,
-    footR,
-    tail
-  );
-
-  bunny.scale.set(0.75, 0.75, 0.75);
-  bunny.position.set(0, 0, -1);
-  bunny.visible = false;
-
-  scene.add(bunny);
-}
-
-function createEar(x, white, pink) {
-  const group = new THREE.Group();
-
-  const outer = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.018, 0.13, 8, 16),
-    white
-  );
-  outer.position.y = 0.065;
-
-  const inner = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.008, 0.09, 8, 16),
-    pink
-  );
-  inner.position.set(0, 0.065, 0.006);
-
-  group.add(outer, inner);
-  group.position.set(x, 0.38, 0);
-  group.rotation.z = x > 0 ? -0.25 : 0.25;
-
-  return group;
-}
-
-function moveBunnyToReticleOrController() {
-  let position = new THREE.Vector3();
-
-  if (reticle.visible) {
-    position.setFromMatrixPosition(reticle.matrixWorld);
-  } else {
-    const tempMatrix = new THREE.Matrix4();
-    tempMatrix.identity().extractRotation(controller.matrixWorld);
-
-    const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix);
-    const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
-
-    position = origin.clone().add(direction.multiplyScalar(1.2));
-    position.y = 0;
+function placeBunnyOnReticle() {
+  if (!reticle.visible) {
+    setHUD(
+      "NO FLOOR FOUND",
+      "Look at the floor until the green circle appears.\nThen press trigger to place the bunny."
+    );
+    return;
   }
 
+  const position = new THREE.Vector3();
+  position.setFromMatrixPosition(reticle.matrixWorld);
+
   bunny.position.copy(position);
-  bunny.position.y = 0;
+
+  // Bunny model origin is at its feet, so y = floor y.
+  bunny.position.y = position.y;
 
   bunny.visible = true;
   bunnyPlaced = true;
   bunnyHidden = false;
   gameFinished = false;
-
   setBunnyColor(0xffffff);
+
+  setHUD(
+    "BUNNY PLACED",
+    "Move your view to another floor position and short press again to move.\nHold trigger for 2 seconds to hide."
+  );
 }
 
-function confirmHide() {
+function confirmHideAutomatically() {
+  if (!bunnyPlaced || bunnyHidden || mode !== "hider") return;
+
   bunnyHidden = true;
   bunny.visible = false;
   mode = "seeker";
 
-  setHUD(
-    "BUNNY HIDDEN SUCCESSFULLY",
-    "Give the headset to Player B.\nSearch mode starts now."
-  );
+  seekerTimeLeft = 60;
+  seekerTimerStarted = true;
+  lastTimerUpdate = performance.now();
 
-  setTimeout(() => {
-    if (!gameFinished) {
-      setHUD("PLAYER B MODE", "Follow distance and direction hints.");
-    }
-  }, 2500);
+  setHUD(
+    "BUNNY HIDDEN!",
+    "Player B starts now.\nTime: 60s\nUse distance and direction hints."
+  );
 }
 
-function updateSeekerHint() {
+function updateSeekerGame() {
   if (mode !== "seeker" || !bunnyPlaced || gameFinished) return;
+
+  const now = performance.now();
+
+  if (seekerTimerStarted && now - lastTimerUpdate >= 1000) {
+    seekerTimeLeft--;
+    lastTimerUpdate = now;
+  }
+
+  if (seekerTimeLeft <= 0) {
+    playerBLoses();
+    return;
+  }
 
   const cameraPos = new THREE.Vector3();
   camera.getWorldPosition(cameraPos);
@@ -304,13 +206,66 @@ function updateSeekerHint() {
   const distance = cameraPos.distanceTo(bunnyPos);
   const direction = getDirectionHint(cameraPos, bunnyPos);
 
+  let urgency = "";
+  if (seekerTimeLeft <= 10) {
+    urgency = "\nHurry up! Time is almost over!";
+  } else if (seekerTimeLeft <= 20) {
+    urgency = "\nTime is running out!";
+  }
+
   setHUD(
-    "PLAYER B SEARCHING",
-    `Distance: ${distance.toFixed(2)} m\nDirection: ${direction}`
+    "PLAYER B: SEARCH",
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}${urgency}`
   );
 
   if (distance <= foundDistance) {
-    foundBunny();
+    playerBWins();
+  }
+}
+
+function playerBWins() {
+  gameFinished = true;
+  mode = "finished";
+  bunnyHidden = false;
+  bunny.visible = true;
+  setBunnyColor(0x86efac);
+
+  setHUD(
+    "BUNNY FOUND!",
+    "Player B wins.\nThe bunny is now visible."
+  );
+}
+
+function playerBLoses() {
+  gameFinished = true;
+  mode = "finished";
+  bunnyHidden = false;
+  bunny.visible = true;
+  setBunnyColor(0x60a5fa);
+
+  setHUD(
+    "TIME IS UP!",
+    "Player B loses.\nThe bunny is revealed."
+  );
+}
+
+function checkBunnyByRay() {
+  if (!bunnyPlaced || !bunnyHidden || gameFinished) return;
+
+  const raycaster = new THREE.Raycaster();
+  const tempMatrix = new THREE.Matrix4();
+
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+  bunny.visible = true;
+  const hits = raycaster.intersectObject(bunny, true);
+  bunny.visible = false;
+
+  if (hits.length > 0) {
+    playerBWins();
   }
 }
 
@@ -338,38 +293,113 @@ function getDirectionHint(cameraPos, targetPos) {
   return "Very close";
 }
 
-function checkBunnyByRay() {
-  if (!bunnyPlaced || !bunnyHidden || gameFinished) return;
+function addBunny() {
+  bunny = new THREE.Group();
 
-  const raycaster = new THREE.Raycaster();
-  const tempMatrix = new THREE.Matrix4();
+  const white = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.85
+  });
 
-  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  const pink = new THREE.MeshStandardMaterial({
+    color: 0xff9eb5,
+    roughness: 0.7
+  });
 
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+  const black = new THREE.MeshStandardMaterial({
+    color: 0x111111
+  });
 
-  bunny.visible = true;
-  const hits = raycaster.intersectObject(bunny, true);
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.09, 32, 32), white);
+  body.scale.set(1, 1.15, 0.95);
+  body.position.y = 0.09;
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 32, 32), white);
+  head.position.y = 0.21;
+
+  const earL = createEar(-0.035, white, pink);
+  const earR = createEar(0.035, white, pink);
+
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.01, 16, 16), black);
+  eyeL.position.set(-0.028, 0.23, 0.072);
+
+  const eyeR = eyeL.clone();
+  eyeR.position.x = 0.028;
+
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 16), pink);
+  nose.position.set(0, 0.2, 0.08);
+
+  const blushL = new THREE.Mesh(new THREE.SphereGeometry(0.014, 16, 16), pink);
+  blushL.scale.set(1.2, 0.65, 0.25);
+  blushL.position.set(-0.048, 0.195, 0.07);
+
+  const blushR = blushL.clone();
+  blushR.position.x = 0.048;
+
+  const footL = new THREE.Mesh(new THREE.SphereGeometry(0.028, 16, 16), white);
+  footL.scale.set(1.25, 0.55, 0.9);
+  footL.position.set(-0.038, 0.004, 0.04);
+
+  const footR = footL.clone();
+  footR.position.x = 0.038;
+
+  const tail = new THREE.Mesh(new THREE.SphereGeometry(0.026, 16, 16), white);
+  tail.position.set(0, 0.09, -0.08);
+
+  bunny.add(
+    body,
+    head,
+    earL,
+    earR,
+    eyeL,
+    eyeR,
+    nose,
+    blushL,
+    blushR,
+    footL,
+    footR,
+    tail
+  );
+
+  bunny.scale.set(0.75, 0.75, 0.75);
+  bunny.position.set(0, 0, -1);
   bunny.visible = false;
 
-  if (hits.length > 0) {
-    foundBunny();
-  }
+  scene.add(bunny);
 }
 
-function foundBunny() {
-  gameFinished = true;
-  bunnyHidden = false;
-  bunny.visible = true;
-  mode = "finished";
+function createEar(x, white, pink) {
+  const group = new THREE.Group();
 
-  setBunnyColor(0x86efac);
-
-  setHUD(
-    "BUNNY FOUND!",
-    "Player B wins.\nThe bunny is now visible."
+  const outer = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.015, 0.11, 8, 16),
+    white
   );
+  outer.position.y = 0.055;
+
+  const inner = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.007, 0.08, 8, 16),
+    pink
+  );
+  inner.position.set(0, 0.055, 0.005);
+
+  group.add(outer, inner);
+  group.position.set(x, 0.31, 0);
+  group.rotation.z = x > 0 ? -0.25 : 0.25;
+
+  return group;
+}
+
+function setBunnyColor(color) {
+  bunny.children.forEach((part) => {
+    if (!part.material || !part.material.color) return;
+
+    const current = part.material.color.getHex();
+
+    if (current === 0x111111 || current === 0xff9eb5) return;
+
+    part.material.color.set(color);
+  });
 }
 
 function addWorldHUD() {
@@ -411,15 +441,15 @@ function setHUD(title, body) {
   ctx.stroke();
 
   ctx.fillStyle = "#fde047";
-  ctx.font = "bold 64px Arial";
-  ctx.fillText(title, 48, 115);
+  ctx.font = "bold 62px Arial";
+  ctx.fillText(title, 48, 105);
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "48px Arial";
+  ctx.font = "44px Arial";
 
   const lines = body.split("\n");
   lines.forEach((line, index) => {
-    ctx.fillText(line, 48, 210 + index * 70);
+    ctx.fillText(line, 48, 190 + index * 64);
   });
 
   hudPanel.userData.texture.needsUpdate = true;
@@ -444,8 +474,8 @@ function updateHUDPosition() {
   const camDir = new THREE.Vector3();
   camera.getWorldDirection(camDir);
 
-  const position = camPos.clone().add(camDir.multiplyScalar(1.35));
-  position.y += 0.1;
+  const position = camPos.clone().add(camDir.multiplyScalar(1.25));
+  position.y += 0.05;
 
   hudPanel.position.copy(position);
   hudPanel.lookAt(camPos);
@@ -486,18 +516,6 @@ function updateHitTest(frame) {
   }
 }
 
-function setBunnyColor(color) {
-  bunny.children.forEach((part) => {
-    if (!part.material || !part.material.color) return;
-
-    const current = part.material.color.getHex();
-
-    if (current === 0x111111 || current === 0xff9eb5) return;
-
-    part.material.color.set(color);
-  });
-}
-
 function render(timestamp, frame) {
   if (frame) {
     updateHitTest(frame);
@@ -506,17 +524,23 @@ function render(timestamp, frame) {
   if (triggerHolding && mode === "hider" && bunnyPlaced && !bunnyHidden) {
     const held = (performance.now() - triggerStartTime) / 1000;
 
-    setHUD(
-      "HOLD TO HIDE",
-      `${held.toFixed(1)} / 2.0 seconds\nRelease after 2 seconds.`
-    );
+    if (held >= 2 && !hideAutoConfirmed) {
+      hideAutoConfirmed = true;
+      triggerHolding = false;
+      confirmHideAutomatically();
+    } else {
+      setHUD(
+        "HOLD TO HIDE",
+        `${held.toFixed(1)} / 2.0 seconds\nKeep holding until it hides.`
+      );
+    }
   }
 
   updateHUDPosition();
-  updateSeekerHint();
+  updateSeekerGame();
 
   if (bunny && bunny.visible) {
-    bunny.rotation.y += 0.012;
+    bunny.rotation.y += 0.01;
   }
 
   renderer.render(scene, camera);
