@@ -2,134 +2,221 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Classroom Phantom Hunt</title>
 
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
       overflow: hidden;
-      font-family: Arial, sans-serif;
-      background: #111827;
+      font-family: Inter, Arial, sans-serif;
+      background: #f6d7b0;
     }
 
     #menu {
       position: absolute;
       top: 24px;
       left: 24px;
-      width: 380px;
-      background: rgba(17, 24, 39, 0.88);
-      color: white;
+      width: 360px;
       padding: 22px;
-      border-radius: 18px;
+      border-radius: 26px;
       z-index: 10;
-      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(8px);
+      color: white;
+      background: linear-gradient(180deg, rgba(7, 18, 38, 0.96), rgba(9, 24, 50, 0.92));
+      box-shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(14px);
     }
 
     h1 {
-      margin: 0 0 8px 0;
-      font-size: 26px;
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.12;
+      letter-spacing: -0.5px;
     }
 
     .subtitle {
-      color: #cbd5e1;
+      margin-top: 12px;
+      color: #d1d5db;
       font-size: 14px;
-      margin-bottom: 18px;
+      line-height: 1.45;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 8px 13px;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.22);
+      color: #86efac;
+      font-size: 13px;
+      font-weight: 800;
     }
 
     .section-title {
-      font-weight: bold;
-      margin-top: 16px;
-      margin-bottom: 8px;
-      color: #facc15;
+      margin-top: 22px;
+      color: #fde047;
+      font-size: 18px;
+      font-weight: 900;
     }
 
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+    .buttons {
+      margin-top: 13px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 11px;
     }
 
     button {
       border: none;
-      padding: 10px 14px;
-      border-radius: 10px;
-      background: #2563eb;
+      border-radius: 16px;
+      padding: 14px 10px;
+      font-size: 15px;
+      font-weight: 900;
       color: white;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
       cursor: pointer;
-      font-weight: bold;
+      box-shadow: 0 10px 24px rgba(37, 99, 235, 0.34);
+      transition: 0.18s ease;
     }
 
     button:hover {
-      background: #1d4ed8;
+      transform: translateY(-2px) scale(1.02);
+      filter: brightness(1.08);
+    }
+
+    button:active {
+      transform: scale(0.98);
     }
 
     #restartButton {
-      background: #dc2626;
+      background: linear-gradient(135deg, #ef4444, #b91c1c);
+      box-shadow: 0 10px 24px rgba(239, 68, 68, 0.34);
     }
 
-    #restartButton:hover {
-      background: #b91c1c;
-    }
-
-    .info-box {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.08);
-      line-height: 1.5;
-    }
-
-    #timer {
-      font-size: 22px;
-      color: #38bdf8;
-      font-weight: bold;
+    .status-card {
+      margin-top: 18px;
+      padding: 17px;
+      border-radius: 19px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
     }
 
     #status {
-      color: #ffffff;
-      font-weight: bold;
+      font-size: 16px;
+      font-weight: 900;
+      margin-bottom: 10px;
+      line-height: 1.35;
+    }
+
+    #timer {
+      font-size: 34px;
+      font-weight: 950;
+      color: #38bdf8;
+      letter-spacing: -1px;
     }
 
     #hint {
+      margin-top: 8px;
       color: #facc15;
-      font-weight: bold;
+      font-size: 15px;
+      font-weight: 900;
+      line-height: 1.35;
     }
 
-    #instruction {
-      color: #cbd5e1;
+    .instruction {
+      margin-top: 15px;
+      padding: 14px;
+      border-radius: 17px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #dbeafe;
       font-size: 13px;
-      margin-top: 12px;
+      line-height: 1.55;
+    }
+
+    .green {
+      color: #4ade80;
+      font-weight: 900;
+    }
+
+    .blue {
+      color: #60a5fa;
+      font-weight: 900;
+    }
+
+    #bottomTip {
+      position: absolute;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      z-index: 9;
+      padding: 12px 22px;
+      border-radius: 999px;
+      color: white;
+      background: rgba(84, 49, 20, 0.68);
+      backdrop-filter: blur(10px);
+      font-weight: 800;
+      font-size: 14px;
+      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.28);
+    }
+
+    @media (max-width: 800px) {
+      #menu {
+        width: 310px;
+        padding: 18px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      #bottomTip {
+        display: none;
+      }
     }
   </style>
 </head>
 
 <body>
   <div id="menu">
-    <h1>Classroom Phantom Hunt</h1>
+    <h1>✨ Classroom Phantom Hunt</h1>
+
     <div class="subtitle">
-      A mixed reality hide-and-seek prototype for classroom spaces.
+      A polished WebXR hide-and-seek prototype. Player A hides the bunny. Player B finds it before time runs out.
     </div>
 
-    <div class="section-title">Player A: Choose a hiding place</div>
+    <div class="badge">🎮 VR / Desktop Prototype</div>
 
-    <div class="button-row">
-      <button onclick="hideAt('blackboard')">Blackboard</button>
-      <button onclick="hideAt('desk')">Desk</button>
-      <button onclick="hideAt('door')">Door</button>
-      <button id="restartButton" onclick="restartGame()">Restart</button>
+    <div class="section-title">Player A: Choose hiding place</div>
+
+    <div class="buttons">
+      <button onclick="hideAt('blackboard')">📗 Blackboard</button>
+      <button onclick="hideAt('desk')">🪑 Desk</button>
+      <button onclick="hideAt('door')">🚪 Door</button>
+      <button id="restartButton" onclick="restartGame()">🔄 Restart</button>
     </div>
 
-    <div class="info-box">
+    <div class="status-card">
       <div id="status">Choose a hiding location.</div>
       <div id="timer">Time: 60</div>
       <div id="hint">Hint: None</div>
     </div>
 
-    <div id="instruction">
-      Player B: click the red target on desktop, or select it in VR.
+    <div class="instruction">
+      🐰 Player B: click the bunny on desktop, or select it in VR.
+      <br />
+      <span class="green">Green</span> means success.
+      <span class="blue">Blue</span> means time is up.
     </div>
   </div>
+
+  <div id="bottomTip">🖱️ Click the bunny &nbsp; | &nbsp; 🥽 VR: Point and select</div>
 
   <script type="module" src="/src/main.js"></script>
 </body>
