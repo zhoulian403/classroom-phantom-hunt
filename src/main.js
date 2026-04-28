@@ -7,9 +7,9 @@ let bunny, marker, hudPanel;
 let controllerHitTestSource = null;
 let controllerHitTestSourceRequested = false;
 
+let latestHitMatrix = null;
 let latestHitPosition = null;
-let latestHitNormal = null;
-let latestSurfaceLabel = "No surface";
+let latestSurfaceLabel = "No real surface";
 
 let mode = "hider";
 let bunnyPlaced = false;
@@ -22,8 +22,6 @@ let hideConfirmed = false;
 
 let seekerTimeLeft = 60;
 let lastTimerUpdate = 0;
-
-let hiddenSurfaceLabel = "Unknown surface";
 
 const foundDistance = 0.45;
 
@@ -52,8 +50,8 @@ function init() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test", "local-floor"],
-      optionalFeatures: ["dom-overlay"],
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["local-floor", "dom-overlay"],
       domOverlay: { root: document.body }
     })
   );
@@ -66,7 +64,7 @@ function init() {
 
   setHUD(
     "PLAYER A: HIDE",
-    "Point the controller ray at a real surface.\nTrigger = place bunny there.\nHold trigger 2s = hide.\nNo surface = no placement."
+    "Point controller at a REAL surface.\nGreen marker = valid real surface.\nTrigger = place bunny.\nHold trigger 2s = hide."
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -92,7 +90,7 @@ function addController() {
     hideConfirmed = false;
 
     if (mode === "hider") {
-      placeBunnyAtControllerSurfaceHit();
+      placeBunnyAtRealSurface();
     }
 
     if (mode === "seeker") {
@@ -120,67 +118,74 @@ function addController() {
   controller.add(line);
 }
 
-function requestControllerHitTestSource() {
+function setupControllerHitTestSource() {
   const session = renderer.xr.getSession();
   if (!session || controllerHitTestSourceRequested) return;
 
   const inputSources = Array.from(session.inputSources);
-  const source = inputSources.find(
-    (input) => input.targetRayMode === "tracked-pointer" && input.targetRaySpace
+  const trackedPointer = inputSources.find(
+    (source) =>
+      source.targetRayMode === "tracked-pointer" &&
+      source.targetRaySpace
   );
 
-  if (!source) return;
+  if (!trackedPointer) return;
 
   controllerHitTestSourceRequested = true;
 
   session
-    .requestHitTestSource({ space: source.targetRaySpace })
-    .then((hitTestSource) => {
-      controllerHitTestSource = hitTestSource;
+    .requestHitTestSource({
+      space: trackedPointer.targetRaySpace
+    })
+    .then((source) => {
+      controllerHitTestSource = source;
     })
     .catch(() => {
-      controllerHitTestSourceRequested = false;
       controllerHitTestSource = null;
+      controllerHitTestSourceRequested = false;
+      setHUD(
+        "HIT TEST FAILED",
+        "Quest Browser did not provide controller surface hit-test.\nTry entering AR again."
+      );
     });
 
   session.addEventListener("end", () => {
     controllerHitTestSource = null;
     controllerHitTestSourceRequested = false;
+    latestHitMatrix = null;
     latestHitPosition = null;
-    latestHitNormal = null;
+    marker.visible = false;
   });
 }
 
 function updateControllerHitTest(frame) {
-  requestControllerHitTestSource();
+  setupControllerHitTestSource();
 
-  if (!controllerHitTestSource || !frame) {
-    marker.visible = false;
+  if (!frame || !controllerHitTestSource) {
+    latestHitMatrix = null;
     latestHitPosition = null;
-    latestHitNormal = null;
-    latestSurfaceLabel = "No surface";
+    marker.visible = false;
     return;
   }
 
   const referenceSpace = renderer.xr.getReferenceSpace();
-  const hitResults = frame.getHitTestResults(controllerHitTestSource);
+  const hits = frame.getHitTestResults(controllerHitTestSource);
 
-  if (hitResults.length === 0) {
-    marker.visible = false;
+  if (hits.length === 0) {
+    latestHitMatrix = null;
     latestHitPosition = null;
-    latestHitNormal = null;
-    latestSurfaceLabel = "No surface detected";
+    latestSurfaceLabel = "No real surface";
+    marker.visible = false;
     return;
   }
 
-  const hit = hitResults[0];
+  const hit = hits[0];
   const pose = hit.getPose(referenceSpace);
 
   if (!pose) {
-    marker.visible = false;
+    latestHitMatrix = null;
     latestHitPosition = null;
-    latestHitNormal = null;
-    latestSurfaceLabel = "No surface detected";
+    marker.visible = false;
     return;
   }
 
@@ -193,77 +198,61 @@ function updateControllerHitTest(frame) {
 
   matrix.decompose(position, quaternion, scale);
 
-  const normal = new THREE.Vector3(0, 1, 0);
-  normal.applyQuaternion(quaternion).normalize();
-
+  latestHitMatrix = matrix;
   latestHitPosition = position;
-  latestHitNormal = normal;
-  latestSurfaceLabel = classifySurface(position, normal);
+  latestSurfaceLabel = classifyByHeight(position);
 
   marker.visible = true;
   marker.matrix.copy(matrix);
 }
 
-function placeBunnyAtControllerSurfaceHit() {
-  if (!latestHitPosition || !latestHitNormal) {
+function placeBunnyAtRealSurface() {
+  if (!latestHitMatrix || !latestHitPosition) {
     setHUD(
       "NO REAL SURFACE HIT",
-      "The controller ray is not hitting a detected surface.\nAim at floor, desk, shelf, wall, glass, or window.\nBunny will NOT be placed in air."
+      "The controller ray is not hitting a detected real surface.\nAim at floor, desk, wall, window, glass, or bookshelf.\nBunny will NOT be placed in air."
     );
     return;
   }
 
-  const offset = latestHitNormal.clone().multiplyScalar(0.035);
-  const finalPosition = latestHitPosition.clone().add(offset);
+  bunny.position.copy(latestHitPosition);
 
-  bunny.position.copy(finalPosition);
-  orientBunny(latestHitNormal);
+  // small offset so it does not visually sink into the detected surface
+  bunny.position.y += 0.02;
+
+  faceBunnyToUser();
 
   bunny.visible = true;
   bunnyPlaced = true;
   bunnyHidden = false;
   gameFinished = false;
-  hiddenSurfaceLabel = latestSurfaceLabel;
 
   setBunnyColor(0xffffff);
 
   setHUD(
     "BUNNY PLACED",
-    `Placed on: ${hiddenSurfaceLabel}\nTrigger again to move it.\nHold trigger 2s to hide.`
+    `Placed at controller ray hit point.\nDetected: ${latestSurfaceLabel}\nTrigger again to move.\nHold trigger 2s to hide.`
   );
 }
 
-function orientBunny(normal) {
+function faceBunnyToUser() {
   const cameraPos = new THREE.Vector3();
   camera.getWorldPosition(cameraPos);
 
   bunny.lookAt(cameraPos);
-
   bunny.rotation.x = 0;
   bunny.rotation.z = 0;
-
-  if (Math.abs(normal.y) > 0.65) {
-    bunny.rotation.x = 0;
-    bunny.rotation.z = 0;
-  }
 }
 
-function classifySurface(position, normal) {
+function classifyByHeight(position) {
   const y = position.y;
-  const horizontal = Math.abs(normal.y) > 0.65;
-  const vertical = Math.abs(normal.y) < 0.35;
 
-  if (horizontal && y < 0.25) return "Floor";
-  if (horizontal && y >= 0.45 && y <= 1.1) return "Desk / Table";
-  if (horizontal && y > 1.1) return "Bookshelf / High Shelf";
+  if (y < 0.25) return "Floor / Low surface";
+  if (y >= 0.45 && y <= 1.1) return "Desk / Table height";
+  if (y > 1.1 && y <= 1.8) return "Shelf / Window height";
+  if (y > 1.8) return "High wall / Window / Glass";
 
-  if (vertical && y >= 0.5 && y <= 2.3) {
-    return "Wall / Window / Glass / Bookshelf Side";
-  }
-
-  if (vertical && y > 2.3) return "High Wall / Window";
-
-  return "Detected Study-Room Surface";
+  return "Detected real surface";
 }
 
 function confirmHide() {
@@ -279,7 +268,7 @@ function confirmHide() {
 
   setHUD(
     "BUNNY HIDDEN!",
-    `Hidden on: ${hiddenSurfaceLabel}\nPlayer B starts now.\nTime: 60s`
+    `Hidden at real surface point.\nSurface hint: ${latestSurfaceLabel}\nPlayer B starts now.\nTime: 60s`
   );
 }
 
@@ -316,7 +305,7 @@ function updateSeekerGame() {
 
   setHUD(
     "PLAYER B: SEARCH",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${hiddenSurfaceLabel}${warning}`
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${latestSurfaceLabel}${warning}`
   );
 
   if (distance <= foundDistance) {
@@ -381,7 +370,7 @@ function playerBWins() {
 
   setHUD(
     "BUNNY FOUND!",
-    `Player B wins.\nThe bunny was hidden on:\n${hiddenSurfaceLabel}`
+    "Player B wins.\nThe bunny is now visible."
   );
 }
 
@@ -395,7 +384,7 @@ function playerBLoses() {
 
   setHUD(
     "TIME IS UP!",
-    `Player B loses.\nThe bunny was hidden on:\n${hiddenSurfaceLabel}`
+    "Player B loses.\nThe bunny is revealed."
   );
 }
 
