@@ -17,8 +17,51 @@ let seekerTimeLeft = 60;
 let seekerTimerStarted = false;
 let lastTimerUpdate = 0;
 
+let currentZone = null;
+
 const foundDistance = 0.45;
 const floorY = 0;
+
+// Study-room semantic zones.
+// These are approximate relative zones around the AR starting point.
+// In your video, explain that they represent meaningful study-room features.
+const studyRoomZones = [
+  {
+    id: "desk",
+    name: "Desk Zone",
+    hint: "Near the study desk area",
+    position: new THREE.Vector3(1.2, 0, -1.4),
+    radius: 1.2
+  },
+  {
+    id: "bookshelf",
+    name: "Bookshelf Zone",
+    hint: "Near the bookshelf or storage area",
+    position: new THREE.Vector3(-1.4, 0, -1.8),
+    radius: 1.2
+  },
+  {
+    id: "window",
+    name: "Window Zone",
+    hint: "Near the window or natural-light area",
+    position: new THREE.Vector3(1.8, 0, -2.4),
+    radius: 1.2
+  },
+  {
+    id: "entrance",
+    name: "Entrance Zone",
+    hint: "Near the entrance area",
+    position: new THREE.Vector3(-1.8, 0, -0.8),
+    radius: 1.2
+  },
+  {
+    id: "quietCorner",
+    name: "Quiet Corner Zone",
+    hint: "Near a quiet corner of the study room",
+    position: new THREE.Vector3(0, 0, -2.8),
+    radius: 1.4
+  }
+];
 
 init();
 
@@ -53,13 +96,14 @@ function init() {
 
   addLights();
   addPlacementMarker();
+  addStudyRoomZoneMarkers();
   addBunny();
   addController();
   addWorldHUD();
 
   setHUD(
     "PLAYER A: HIDE",
-    "Point the controller at the floor.\nShort press trigger to place bunny.\nHold trigger 2s to hide."
+    "Point at a study-room feature.\nValid zones: desk, bookshelf, window,\nentrance, or quiet corner."
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -85,6 +129,25 @@ function addPlacementMarker() {
   placementMarker.rotation.x = -Math.PI / 2;
   placementMarker.visible = false;
   scene.add(placementMarker);
+}
+
+function addStudyRoomZoneMarkers() {
+  studyRoomZones.forEach((zone) => {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(zone.radius - 0.04, zone.radius, 64),
+      new THREE.MeshBasicMaterial({
+        color: 0xfacc15,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide
+      })
+    );
+
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.copy(zone.position);
+    ring.position.y = 0.01;
+    scene.add(ring);
+  });
 }
 
 function addController() {
@@ -144,9 +207,7 @@ function getControllerFloorHit() {
 
   if (t <= 0) return null;
 
-  const hitPoint = origin.clone().add(direction.multiplyScalar(t));
-
-  return hitPoint;
+  return origin.clone().add(direction.multiplyScalar(t));
 }
 
 function updatePlacementMarker() {
@@ -167,16 +228,54 @@ function updatePlacementMarker() {
   placementMarker.position.y = floorY + 0.002;
 }
 
+function getNearestValidZone(point) {
+  let nearestZone = null;
+  let nearestDistance = Infinity;
+
+  for (const zone of studyRoomZones) {
+    const zonePoint = zone.position.clone();
+    zonePoint.y = 0;
+
+    const testPoint = point.clone();
+    testPoint.y = 0;
+
+    const distance = testPoint.distanceTo(zonePoint);
+
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestZone = zone;
+    }
+  }
+
+  if (nearestZone && nearestDistance <= nearestZone.radius) {
+    return nearestZone;
+  }
+
+  return null;
+}
+
 function placeBunnyAtControllerRayHit() {
   const hit = getControllerFloorHit();
 
   if (!hit) {
     setHUD(
       "NO FLOOR HIT",
-      "Aim the controller ray downward at the floor.\nThen press trigger again."
+      "Aim the controller ray downward\nat the study-room floor."
     );
     return;
   }
+
+  const validZone = getNearestValidZone(hit);
+
+  if (!validZone) {
+    setHUD(
+      "INVALID HIDING PLACE",
+      "Choose a study-room feature:\ndesk, bookshelf, window,\nentrance, or quiet corner."
+    );
+    return;
+  }
+
+  currentZone = validZone;
 
   bunny.position.copy(hit);
   bunny.position.y = floorY;
@@ -190,7 +289,7 @@ function placeBunnyAtControllerRayHit() {
 
   setHUD(
     "BUNNY PLACED",
-    "Bunny placed at the ray hit point.\nShort press again to move.\nHold trigger 2s to hide."
+    `Zone: ${currentZone.name}\n${currentZone.hint}\nHold trigger 2s to hide.`
   );
 }
 
@@ -208,7 +307,7 @@ function confirmHideAutomatically() {
 
   setHUD(
     "BUNNY HIDDEN!",
-    "Player B starts now.\nTime: 60s\nFollow distance and direction."
+    `Hidden in: ${currentZone.name}\nPlayer B starts now.\nTime: 60s.`
   );
 }
 
@@ -245,7 +344,7 @@ function updateSeekerGame() {
 
   setHUD(
     "PLAYER B: SEARCH",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}${warning}`
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nZone Hint: ${currentZone.hint}${warning}`
   );
 
   if (distance <= foundDistance) {
@@ -306,7 +405,7 @@ function playerBWins() {
 
   setHUD(
     "BUNNY FOUND!",
-    "Player B wins.\nThe bunny is now visible."
+    `Player B wins.\nThe bunny was hidden in:\n${currentZone.name}.`
   );
 }
 
@@ -319,7 +418,7 @@ function playerBLoses() {
 
   setHUD(
     "TIME IS UP!",
-    "Player B loses.\nThe bunny is revealed."
+    `Player B loses.\nThe bunny was hidden in:\n${currentZone.name}.`
   );
 }
 
@@ -471,15 +570,15 @@ function setHUD(title, body) {
   ctx.stroke();
 
   ctx.fillStyle = "#fde047";
-  ctx.font = "bold 62px Arial";
-  ctx.fillText(title, 48, 105);
+  ctx.font = "bold 58px Arial";
+  ctx.fillText(title, 48, 95);
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "44px Arial";
+  ctx.font = "38px Arial";
 
   const lines = body.split("\n");
   lines.forEach((line, index) => {
-    ctx.fillText(line, 48, 190 + index * 64);
+    ctx.fillText(line, 48, 170 + index * 52);
   });
 
   hudPanel.userData.texture.needsUpdate = true;
