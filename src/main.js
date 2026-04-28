@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 
 let scene, camera, renderer, controller;
-let bunny, placementMarker, hudPanel;
+let bunny, marker, hudPanel;
 
 let mode = "hider";
 let bunnyPlaced = false;
@@ -11,69 +11,30 @@ let gameFinished = false;
 
 let triggerHolding = false;
 let triggerStartTime = 0;
-let hideAutoConfirmed = false;
+let hideConfirmed = false;
 
 let seekerTimeLeft = 60;
-let seekerTimerStarted = false;
 let lastTimerUpdate = 0;
 
-let currentZone = null;
-
 const foundDistance = 0.45;
-const floorY = 0;
 
-// Study-room semantic zones.
-// These are approximate relative zones around the AR starting point.
-// In your video, explain that they represent meaningful study-room features.
-const studyRoomZones = [
-  {
-    id: "desk",
-    name: "Desk Zone",
-    hint: "Near the study desk area",
-    position: new THREE.Vector3(1.2, 0, -1.4),
-    radius: 1.2
-  },
-  {
-    id: "bookshelf",
-    name: "Bookshelf Zone",
-    hint: "Near the bookshelf or storage area",
-    position: new THREE.Vector3(-1.4, 0, -1.8),
-    radius: 1.2
-  },
-  {
-    id: "window",
-    name: "Window Zone",
-    hint: "Near the window or natural-light area",
-    position: new THREE.Vector3(1.8, 0, -2.4),
-    radius: 1.2
-  },
-  {
-    id: "entrance",
-    name: "Entrance Zone",
-    hint: "Near the entrance area",
-    position: new THREE.Vector3(-1.8, 0, -0.8),
-    radius: 1.2
-  },
-  {
-    id: "quietCorner",
-    name: "Quiet Corner Zone",
-    hint: "Near a quiet corner of the study room",
-    position: new THREE.Vector3(0, 0, -2.8),
-    radius: 1.4
-  }
+const surfaces = [
+  { name: "Floor", type: "horizontal", y: 0.0, hint: "Near the study-room floor area" },
+  { name: "Desk Surface", type: "horizontal", y: 0.75, hint: "Near a study desk or table" },
+  { name: "Bookshelf Surface", type: "horizontal", y: 1.25, hint: "Near a bookshelf or storage shelf" },
+  { name: "Window / Wall", type: "vertical", distance: 1.8, hint: "Near a wall, glass, or window area" }
 ];
+
+let surfaceIndex = 0;
+let currentSurface = surfaces[surfaceIndex];
+let hiddenSurface = null;
 
 init();
 
 function init() {
   scene = new THREE.Scene();
 
-  camera = new THREE.PerspectiveCamera(
-    70,
-    window.innerWidth / window.innerHeight,
-    0.01,
-    30
-  );
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -95,15 +56,14 @@ function init() {
   );
 
   addLights();
-  addPlacementMarker();
-  addStudyRoomZoneMarkers();
+  addMarker();
   addBunny();
   addController();
   addWorldHUD();
 
   setHUD(
     "PLAYER A: HIDE",
-    "Point at a study-room feature.\nValid zones: desk, bookshelf, window,\nentrance, or quiet corner."
+    `Surface: ${currentSurface.name}\nSqueeze = change surface\nTrigger = place bunny\nHold trigger 2s = hide`
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -118,38 +78,6 @@ function addLights() {
   scene.add(light);
 }
 
-function addPlacementMarker() {
-  const geometry = new THREE.RingGeometry(0.08, 0.12, 48);
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x00ff88,
-    side: THREE.DoubleSide
-  });
-
-  placementMarker = new THREE.Mesh(geometry, material);
-  placementMarker.rotation.x = -Math.PI / 2;
-  placementMarker.visible = false;
-  scene.add(placementMarker);
-}
-
-function addStudyRoomZoneMarkers() {
-  studyRoomZones.forEach((zone) => {
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(zone.radius - 0.04, zone.radius, 64),
-      new THREE.MeshBasicMaterial({
-        color: 0xfacc15,
-        transparent: true,
-        opacity: 0.22,
-        side: THREE.DoubleSide
-      })
-    );
-
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.copy(zone.position);
-    ring.position.y = 0.01;
-    scene.add(ring);
-  });
-}
-
 function addController() {
   controller = renderer.xr.getController(0);
 
@@ -158,10 +86,10 @@ function addController() {
 
     triggerHolding = true;
     triggerStartTime = performance.now();
-    hideAutoConfirmed = false;
+    hideConfirmed = false;
 
     if (mode === "hider") {
-      placeBunnyAtControllerRayHit();
+      placeBunnyOnSelectedSurface();
     }
 
     if (mode === "seeker") {
@@ -171,6 +99,18 @@ function addController() {
 
   controller.addEventListener("selectend", () => {
     triggerHolding = false;
+  });
+
+  controller.addEventListener("squeezestart", () => {
+    if (mode !== "hider") return;
+
+    surfaceIndex = (surfaceIndex + 1) % surfaces.length;
+    currentSurface = surfaces[surfaceIndex];
+
+    setHUD(
+      "SURFACE CHANGED",
+      `Current surface: ${currentSurface.name}\nTrigger = place bunny here\nSqueeze = change surface`
+    );
   });
 
   scene.add(controller);
@@ -189,9 +129,20 @@ function addController() {
   controller.add(line);
 }
 
-function getControllerFloorHit() {
-  if (!controller) return null;
+function addMarker() {
+  marker = new THREE.Mesh(
+    new THREE.RingGeometry(0.08, 0.12, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0x00ff88,
+      side: THREE.DoubleSide
+    })
+  );
 
+  marker.visible = false;
+  scene.add(marker);
+}
+
+function getControllerRay() {
   const origin = new THREE.Vector3();
   origin.setFromMatrixPosition(controller.matrixWorld);
 
@@ -201,113 +152,126 @@ function getControllerFloorHit() {
   const direction = new THREE.Vector3(0, 0, -1);
   direction.applyMatrix4(tempMatrix).normalize();
 
-  if (Math.abs(direction.y) < 0.0001) return null;
-
-  const t = (floorY - origin.y) / direction.y;
-
-  if (t <= 0) return null;
-
-  return origin.clone().add(direction.multiplyScalar(t));
+  return { origin, direction };
 }
 
-function updatePlacementMarker() {
-  if (mode !== "hider" || bunnyHidden || gameFinished) {
-    placementMarker.visible = false;
-    return;
+function getPlacementPoint() {
+  if (!controller) return null;
+
+  const { origin, direction } = getControllerRay();
+
+  if (currentSurface.type === "horizontal") {
+    if (Math.abs(direction.y) < 0.0001) return null;
+
+    const t = (currentSurface.y - origin.y) / direction.y;
+    if (t <= 0) return null;
+
+    const point = origin.clone().add(direction.multiplyScalar(t));
+    point.y = currentSurface.y;
+
+    return point;
   }
 
-  const hit = getControllerFloorHit();
+  if (currentSurface.type === "vertical") {
+    const cameraPos = new THREE.Vector3();
+    camera.getWorldPosition(cameraPos);
 
-  if (!hit) {
-    placementMarker.visible = false;
-    return;
-  }
+    const cameraDir = new THREE.Vector3();
+    camera.getWorldDirection(cameraDir);
+    cameraDir.y = 0;
+    cameraDir.normalize();
 
-  placementMarker.visible = true;
-  placementMarker.position.copy(hit);
-  placementMarker.position.y = floorY + 0.002;
-}
+    const planePoint = cameraPos.clone().add(cameraDir.multiplyScalar(currentSurface.distance));
+    const planeNormal = cameraDir.clone().negate();
 
-function getNearestValidZone(point) {
-  let nearestZone = null;
-  let nearestDistance = Infinity;
+    const denom = direction.dot(planeNormal);
+    if (Math.abs(denom) < 0.0001) return null;
 
-  for (const zone of studyRoomZones) {
-    const zonePoint = zone.position.clone();
-    zonePoint.y = 0;
+    const t = planePoint.clone().sub(origin).dot(planeNormal) / denom;
+    if (t <= 0) return null;
 
-    const testPoint = point.clone();
-    testPoint.y = 0;
-
-    const distance = testPoint.distanceTo(zonePoint);
-
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestZone = zone;
-    }
-  }
-
-  if (nearestZone && nearestDistance <= nearestZone.radius) {
-    return nearestZone;
+    return origin.clone().add(direction.multiplyScalar(t));
   }
 
   return null;
 }
 
-function placeBunnyAtControllerRayHit() {
-  const hit = getControllerFloorHit();
+function updateMarker() {
+  if (mode !== "hider" || bunnyHidden || gameFinished) {
+    marker.visible = false;
+    return;
+  }
 
-  if (!hit) {
+  const point = getPlacementPoint();
+
+  if (!point) {
+    marker.visible = false;
+    return;
+  }
+
+  marker.visible = true;
+  marker.position.copy(point);
+
+  if (currentSurface.type === "horizontal") {
+    marker.rotation.set(-Math.PI / 2, 0, 0);
+  } else {
+    marker.lookAt(camera.position);
+  }
+}
+
+function placeBunnyOnSelectedSurface() {
+  const point = getPlacementPoint();
+
+  if (!point) {
     setHUD(
-      "NO FLOOR HIT",
-      "Aim the controller ray downward\nat the study-room floor."
+      "NO VALID HIT",
+      `Current surface: ${currentSurface.name}\nAim the controller ray at the selected surface.`
     );
     return;
   }
 
-  const validZone = getNearestValidZone(hit);
+  bunny.position.copy(point);
 
-  if (!validZone) {
-    setHUD(
-      "INVALID HIDING PLACE",
-      "Choose a study-room feature:\ndesk, bookshelf, window,\nentrance, or quiet corner."
-    );
-    return;
+  if (currentSurface.type === "horizontal") {
+    bunny.position.y = currentSurface.y;
+    bunny.rotation.x = 0;
+    bunny.rotation.z = 0;
+  } else {
+    const camPos = new THREE.Vector3();
+    camera.getWorldPosition(camPos);
+    bunny.lookAt(camPos);
+    bunny.rotation.x = 0;
+    bunny.rotation.z = 0;
   }
-
-  currentZone = validZone;
-
-  bunny.position.copy(hit);
-  bunny.position.y = floorY;
 
   bunny.visible = true;
   bunnyPlaced = true;
   bunnyHidden = false;
   gameFinished = false;
+  hiddenSurface = currentSurface;
 
   setBunnyColor(0xffffff);
 
   setHUD(
     "BUNNY PLACED",
-    `Zone: ${currentZone.name}\n${currentZone.hint}\nHold trigger 2s to hide.`
+    `Placed on: ${currentSurface.name}\nSqueeze = change surface\nTrigger = move bunny\nHold trigger 2s = hide`
   );
 }
 
-function confirmHideAutomatically() {
-  if (!bunnyPlaced || bunnyHidden || mode !== "hider") return;
+function confirmHide() {
+  if (!bunnyPlaced || bunnyHidden) return;
 
   bunnyHidden = true;
   bunny.visible = false;
-  placementMarker.visible = false;
+  marker.visible = false;
 
   mode = "seeker";
   seekerTimeLeft = 60;
-  seekerTimerStarted = true;
   lastTimerUpdate = performance.now();
 
   setHUD(
     "BUNNY HIDDEN!",
-    `Hidden in: ${currentZone.name}\nPlayer B starts now.\nTime: 60s.`
+    `Hidden on: ${hiddenSurface.name}\nPlayer B starts now\nTime: 60s`
   );
 }
 
@@ -316,7 +280,7 @@ function updateSeekerGame() {
 
   const now = performance.now();
 
-  if (seekerTimerStarted && now - lastTimerUpdate >= 1000) {
+  if (now - lastTimerUpdate >= 1000) {
     seekerTimeLeft--;
     lastTimerUpdate = now;
   }
@@ -344,7 +308,7 @@ function updateSeekerGame() {
 
   setHUD(
     "PLAYER B: SEARCH",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nZone Hint: ${currentZone.hint}${warning}`
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${hiddenSurface.hint}${warning}`
   );
 
   if (distance <= foundDistance) {
@@ -380,12 +344,10 @@ function checkBunnyByRay() {
   if (!bunnyPlaced || !bunnyHidden || gameFinished) return;
 
   const raycaster = new THREE.Raycaster();
-  const tempMatrix = new THREE.Matrix4();
+  const { origin, direction } = getControllerRay();
 
-  tempMatrix.identity().extractRotation(controller.matrixWorld);
-
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+  raycaster.ray.origin.copy(origin);
+  raycaster.ray.direction.copy(direction);
 
   bunny.visible = true;
   const hits = raycaster.intersectObject(bunny, true);
@@ -405,7 +367,7 @@ function playerBWins() {
 
   setHUD(
     "BUNNY FOUND!",
-    `Player B wins.\nThe bunny was hidden in:\n${currentZone.name}.`
+    `Player B wins.\nThe bunny was hidden on:\n${hiddenSurface.name}`
   );
 }
 
@@ -418,7 +380,7 @@ function playerBLoses() {
 
   setHUD(
     "TIME IS UP!",
-    `Player B loses.\nThe bunny was hidden in:\n${currentZone.name}.`
+    `Player B loses.\nThe bunny was hidden on:\n${hiddenSurface.name}`
   );
 }
 
@@ -491,9 +453,7 @@ function addBunny() {
   );
 
   bunny.scale.set(0.75, 0.75, 0.75);
-  bunny.position.set(0, 0, -1);
   bunny.visible = false;
-
   scene.add(bunny);
 }
 
@@ -611,15 +571,15 @@ function updateHUDPosition() {
 }
 
 function render() {
-  updatePlacementMarker();
+  updateMarker();
 
   if (triggerHolding && mode === "hider" && bunnyPlaced && !bunnyHidden) {
     const held = (performance.now() - triggerStartTime) / 1000;
 
-    if (held >= 2 && !hideAutoConfirmed) {
-      hideAutoConfirmed = true;
+    if (held >= 2 && !hideConfirmed) {
+      hideConfirmed = true;
       triggerHolding = false;
-      confirmHideAutomatically();
+      confirmHide();
     } else {
       setHUD(
         "HOLD TO HIDE",
