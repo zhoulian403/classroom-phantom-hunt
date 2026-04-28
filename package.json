@@ -1,11 +1,19 @@
 {
+  "name": "classroom-phantom-hunt",
+  "private": true,
+  "version": "0.0.0",
+  "homepage": "https://zhoulian403.github.io/classroom-phantom-hunt",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "vite build && gh-pages -d dist"
   },
   "dependencies": {
-    "three": "^0.160.0",
-    "vite": "^5.0.0"
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "gh-pages": "^6.0.0"
   }
 }
