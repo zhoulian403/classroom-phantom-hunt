@@ -2,16 +2,13 @@ import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 
 let scene, camera, renderer, controller;
-let bunny, marker, hudPanel;
+let bunny, hudPanel, marker;
 
-let controllerHitTestSource = null;
-let controllerHitTestSourceRequested = false;
+let calibrationStep = 0;
+let calibratedSurfaces = [];
+let selectedSurfaceIndex = 0;
 
-let latestHitMatrix = null;
-let latestHitPosition = null;
-let latestSurfaceLabel = "No real surface";
-
-let mode = "hider";
+let mode = "calibration";
 let bunnyPlaced = false;
 let bunnyHidden = false;
 let gameFinished = false;
@@ -25,17 +22,27 @@ let lastTimerUpdate = 0;
 
 const foundDistance = 0.45;
 
+const calibrationNames = [
+  {
+    name: "Floor",
+    hint: "Point at the real floor and press trigger."
+  },
+  {
+    name: "Desk",
+    hint: "Point at the real desk/table surface and press trigger."
+  },
+  {
+    name: "Window / Wall",
+    hint: "Point at the real window, glass, or wall and press trigger."
+  }
+];
+
 init();
 
 function init() {
   scene = new THREE.Scene();
 
-  camera = new THREE.PerspectiveCamera(
-    70,
-    window.innerWidth / window.innerHeight,
-    0.01,
-    30
-  );
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -50,8 +57,8 @@ function init() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test"],
-      optionalFeatures: ["local-floor", "dom-overlay"],
+      requiredFeatures: ["local-floor"],
+      optionalFeatures: ["dom-overlay"],
       domOverlay: { root: document.body }
     })
   );
@@ -63,8 +70,8 @@ function init() {
   addWorldHUD();
 
   setHUD(
-    "PLAYER A: HIDE",
-    "Point controller at a REAL surface.\nGreen marker = valid real surface.\nTrigger = place bunny.\nHold trigger 2s = hide."
+    "CALIBRATION 1/3",
+    calibrationNames[0].hint
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -89,8 +96,14 @@ function addController() {
     triggerStartTime = performance.now();
     hideConfirmed = false;
 
+    if (mode === "calibration") {
+      calibrateCurrentSurface();
+      return;
+    }
+
     if (mode === "hider") {
-      placeBunnyAtRealSurface();
+      placeBunnyOnSelectedSurface();
+      return;
     }
 
     if (mode === "seeker") {
@@ -100,6 +113,18 @@ function addController() {
 
   controller.addEventListener("selectend", () => {
     triggerHolding = false;
+  });
+
+  controller.addEventListener("squeezestart", () => {
+    if (mode !== "hider") return;
+
+    selectedSurfaceIndex = (selectedSurfaceIndex + 1) % calibratedSurfaces.length;
+    const surface = calibratedSurfaces[selectedSurfaceIndex];
+
+    setHUD(
+      "SURFACE SELECTED",
+      `Current: ${surface.name}\nTrigger = place bunny here.\nSqueeze = change surface.\nHold trigger 2s = hide.`
+    );
   });
 
   scene.add(controller);
@@ -114,145 +139,74 @@ function addController() {
     new THREE.LineBasicMaterial({ color: 0x00ff88 })
   );
 
-  line.scale.z = 4;
+  line.scale.z = 3;
   controller.add(line);
 }
 
-function setupControllerHitTestSource() {
-  const session = renderer.xr.getSession();
-  if (!session || controllerHitTestSourceRequested) return;
-
-  const inputSources = Array.from(session.inputSources);
-  const trackedPointer = inputSources.find(
-    (source) =>
-      source.targetRayMode === "tracked-pointer" &&
-      source.targetRaySpace
-  );
-
-  if (!trackedPointer) return;
-
-  controllerHitTestSourceRequested = true;
-
-  session
-    .requestHitTestSource({
-      space: trackedPointer.targetRaySpace
-    })
-    .then((source) => {
-      controllerHitTestSource = source;
-    })
-    .catch(() => {
-      controllerHitTestSource = null;
-      controllerHitTestSourceRequested = false;
-      setHUD(
-        "HIT TEST FAILED",
-        "Quest Browser did not provide controller surface hit-test.\nTry entering AR again."
-      );
-    });
-
-  session.addEventListener("end", () => {
-    controllerHitTestSource = null;
-    controllerHitTestSourceRequested = false;
-    latestHitMatrix = null;
-    latestHitPosition = null;
-    marker.visible = false;
-  });
-}
-
-function updateControllerHitTest(frame) {
-  setupControllerHitTestSource();
-
-  if (!frame || !controllerHitTestSource) {
-    latestHitMatrix = null;
-    latestHitPosition = null;
-    marker.visible = false;
-    return;
-  }
-
-  const referenceSpace = renderer.xr.getReferenceSpace();
-  const hits = frame.getHitTestResults(controllerHitTestSource);
-
-  if (hits.length === 0) {
-    latestHitMatrix = null;
-    latestHitPosition = null;
-    latestSurfaceLabel = "No real surface";
-    marker.visible = false;
-    return;
-  }
-
-  const hit = hits[0];
-  const pose = hit.getPose(referenceSpace);
-
-  if (!pose) {
-    latestHitMatrix = null;
-    latestHitPosition = null;
-    marker.visible = false;
-    return;
-  }
+function getControllerRay() {
+  const origin = new THREE.Vector3();
+  origin.setFromMatrixPosition(controller.matrixWorld);
 
   const matrix = new THREE.Matrix4();
-  matrix.fromArray(pose.transform.matrix);
+  matrix.identity().extractRotation(controller.matrixWorld);
 
-  const position = new THREE.Vector3();
-  const quaternion = new THREE.Quaternion();
-  const scale = new THREE.Vector3();
+  const direction = new THREE.Vector3(0, 0, -1);
+  direction.applyMatrix4(matrix).normalize();
 
-  matrix.decompose(position, quaternion, scale);
-
-  latestHitMatrix = matrix;
-  latestHitPosition = position;
-  latestSurfaceLabel = classifyByHeight(position);
-
-  marker.visible = true;
-  marker.matrix.copy(matrix);
+  return { origin, direction };
 }
 
-function placeBunnyAtRealSurface() {
-  if (!latestHitMatrix || !latestHitPosition) {
+function getPointAlongControllerRay(distance = 1.5) {
+  const { origin, direction } = getControllerRay();
+  return origin.clone().add(direction.multiplyScalar(distance));
+}
+
+function calibrateCurrentSurface() {
+  const point = getPointAlongControllerRay(1.5);
+  const data = calibrationNames[calibrationStep];
+
+  calibratedSurfaces.push({
+    name: data.name,
+    position: point.clone()
+  });
+
+  calibrationStep++;
+
+  if (calibrationStep < calibrationNames.length) {
     setHUD(
-      "NO REAL SURFACE HIT",
-      "The controller ray is not hitting a detected real surface.\nAim at floor, desk, wall, window, glass, or bookshelf.\nBunny will NOT be placed in air."
+      `CALIBRATION ${calibrationStep + 1}/3`,
+      calibrationNames[calibrationStep].hint
     );
-    return;
+  } else {
+    mode = "hider";
+    selectedSurfaceIndex = 0;
+
+    setHUD(
+      "PLAYER A: HIDE",
+      "Calibration complete.\nSqueeze = choose Floor / Desk / Window.\nTrigger = place bunny.\nHold trigger 2s = hide."
+    );
   }
+}
 
-  bunny.position.copy(latestHitPosition);
+function placeBunnyOnSelectedSurface() {
+  if (calibratedSurfaces.length === 0) return;
 
-  // small offset so it does not visually sink into the detected surface
-  bunny.position.y += 0.02;
+  const surface = calibratedSurfaces[selectedSurfaceIndex];
 
-  faceBunnyToUser();
-
+  bunny.position.copy(surface.position);
   bunny.visible = true;
+
   bunnyPlaced = true;
   bunnyHidden = false;
   gameFinished = false;
 
+  faceBunnyToUser();
   setBunnyColor(0xffffff);
 
   setHUD(
     "BUNNY PLACED",
-    `Placed at controller ray hit point.\nDetected: ${latestSurfaceLabel}\nTrigger again to move.\nHold trigger 2s to hide.`
+    `Placed on: ${surface.name}\nSqueeze = change surface.\nTrigger = place again.\nHold trigger 2s = hide.`
   );
-}
-
-function faceBunnyToUser() {
-  const cameraPos = new THREE.Vector3();
-  camera.getWorldPosition(cameraPos);
-
-  bunny.lookAt(cameraPos);
-  bunny.rotation.x = 0;
-  bunny.rotation.z = 0;
-}
-
-function classifyByHeight(position) {
-  const y = position.y;
-
-  if (y < 0.25) return "Floor / Low surface";
-  if (y >= 0.45 && y <= 1.1) return "Desk / Table height";
-  if (y > 1.1 && y <= 1.8) return "Shelf / Window height";
-  if (y > 1.8) return "High wall / Window / Glass";
-
-  return "Detected real surface";
 }
 
 function confirmHide() {
@@ -266,9 +220,11 @@ function confirmHide() {
   seekerTimeLeft = 60;
   lastTimerUpdate = performance.now();
 
+  const surface = calibratedSurfaces[selectedSurfaceIndex];
+
   setHUD(
     "BUNNY HIDDEN!",
-    `Hidden at real surface point.\nSurface hint: ${latestSurfaceLabel}\nPlayer B starts now.\nTime: 60s`
+    `Hidden on: ${surface.name}\nPlayer B starts now.\nTime: 60s.`
   );
 }
 
@@ -297,20 +253,44 @@ function updateSeekerGame() {
   const direction = getDirectionHint(cameraPos, bunnyPos);
 
   let warning = "";
-  if (seekerTimeLeft <= 10) {
-    warning = "\nHurry up! Time is almost over!";
-  } else if (seekerTimeLeft <= 20) {
-    warning = "\nTime is running out!";
-  }
+  if (seekerTimeLeft <= 10) warning = "\nHurry up! Time is almost over!";
+  else if (seekerTimeLeft <= 20) warning = "\nTime is running out!";
+
+  const surface = calibratedSurfaces[selectedSurfaceIndex];
 
   setHUD(
     "PLAYER B: SEARCH",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${latestSurfaceLabel}${warning}`
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${surface.name}${warning}`
   );
 
   if (distance <= foundDistance) {
     playerBWins();
   }
+}
+
+function updateMarker() {
+  if (mode === "calibration") {
+    marker.position.copy(getPointAlongControllerRay(1.5));
+    marker.visible = true;
+    return;
+  }
+
+  if (mode === "hider" && calibratedSurfaces.length > 0 && !bunnyHidden) {
+    marker.position.copy(calibratedSurfaces[selectedSurfaceIndex].position);
+    marker.visible = true;
+    return;
+  }
+
+  marker.visible = false;
+}
+
+function faceBunnyToUser() {
+  const cameraPos = new THREE.Vector3();
+  camera.getWorldPosition(cameraPos);
+
+  bunny.lookAt(cameraPos);
+  bunny.rotation.x = 0;
+  bunny.rotation.z = 0;
 }
 
 function getDirectionHint(cameraPos, targetPos) {
@@ -340,15 +320,7 @@ function getDirectionHint(cameraPos, targetPos) {
 function checkBunnyByRay() {
   if (!bunnyPlaced || !bunnyHidden || gameFinished) return;
 
-  const origin = new THREE.Vector3();
-  origin.setFromMatrixPosition(controller.matrixWorld);
-
-  const matrix = new THREE.Matrix4();
-  matrix.identity().extractRotation(controller.matrixWorld);
-
-  const direction = new THREE.Vector3(0, 0, -1);
-  direction.applyMatrix4(matrix).normalize();
-
+  const { origin, direction } = getControllerRay();
   const raycaster = new THREE.Raycaster(origin, direction);
 
   bunny.visible = true;
@@ -390,35 +362,20 @@ function playerBLoses() {
 
 function addMarker() {
   marker = new THREE.Mesh(
-    new THREE.RingGeometry(0.08, 0.12, 48),
-    new THREE.MeshBasicMaterial({
-      color: 0x00ff88,
-      side: THREE.DoubleSide
-    })
+    new THREE.SphereGeometry(0.04, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0x00ff88 })
   );
 
   marker.visible = false;
-  marker.matrixAutoUpdate = false;
-
   scene.add(marker);
 }
 
 function addBunny() {
   bunny = new THREE.Group();
 
-  const white = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.85
-  });
-
-  const pink = new THREE.MeshStandardMaterial({
-    color: 0xff9eb5,
-    roughness: 0.7
-  });
-
-  const black = new THREE.MeshStandardMaterial({
-    color: 0x111111
-  });
+  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 });
+  const pink = new THREE.MeshStandardMaterial({ color: 0xff9eb5, roughness: 0.7 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x111111 });
 
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.09, 32, 32), white);
   body.scale.set(1, 1.15, 0.95);
@@ -456,20 +413,7 @@ function addBunny() {
   const tail = new THREE.Mesh(new THREE.SphereGeometry(0.026, 16, 16), white);
   tail.position.set(0, 0.09, -0.08);
 
-  bunny.add(
-    body,
-    head,
-    earL,
-    earR,
-    eyeL,
-    eyeR,
-    nose,
-    blushL,
-    blushR,
-    footL,
-    footR,
-    tail
-  );
+  bunny.add(body, head, earL, earR, eyeL, eyeR, nose, blushL, blushR, footL, footR, tail);
 
   bunny.scale.set(0.75, 0.75, 0.75);
   bunny.visible = false;
@@ -517,15 +461,10 @@ function addWorldHUD() {
   canvas.height = 512;
 
   const texture = new THREE.CanvasTexture(canvas);
-
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true
-  });
-
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
   const geometry = new THREE.PlaneGeometry(1.35, 0.68);
-  hudPanel = new THREE.Mesh(geometry, material);
 
+  hudPanel = new THREE.Mesh(geometry, material);
   hudPanel.userData.canvas = canvas;
   hudPanel.userData.texture = texture;
 
@@ -590,10 +529,8 @@ function updateHUDPosition() {
   hudPanel.lookAt(camPos);
 }
 
-function render(timestamp, frame) {
-  if (frame) {
-    updateControllerHitTest(frame);
-  }
+function render() {
+  updateMarker();
 
   if (triggerHolding && mode === "hider" && bunnyPlaced && !bunnyHidden) {
     const held = (performance.now() - triggerStartTime) / 1000;
@@ -621,7 +558,7 @@ function render(timestamp, frame) {
 }
 
 function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = window.innerWidth / windowHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
