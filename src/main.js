@@ -4,6 +4,12 @@ import { ARButton } from "three/addons/webxr/ARButton.js";
 let scene, camera, renderer, controller;
 let bunny, marker, hudPanel;
 
+let hitTestSource = null;
+let hitTestSourceRequested = false;
+let latestHitPosition = null;
+let latestHitNormal = null;
+let latestSurfaceLabel = "Unknown Surface";
+
 let mode = "hider";
 let bunnyPlaced = false;
 let bunnyHidden = false;
@@ -16,25 +22,21 @@ let hideConfirmed = false;
 let seekerTimeLeft = 60;
 let lastTimerUpdate = 0;
 
+let hiddenSurfaceLabel = "Unknown Surface";
+
 const foundDistance = 0.45;
-
-const surfaces = [
-  { name: "Floor", type: "horizontal", y: 0.0, hint: "Near the study-room floor area" },
-  { name: "Desk Surface", type: "horizontal", y: 0.75, hint: "Near a study desk or table" },
-  { name: "Bookshelf Surface", type: "horizontal", y: 1.25, hint: "Near a bookshelf or storage shelf" },
-  { name: "Window / Wall", type: "vertical", distance: 1.8, hint: "Near a wall, glass, or window area" }
-];
-
-let surfaceIndex = 0;
-let currentSurface = surfaces[surfaceIndex];
-let hiddenSurface = null;
 
 init();
 
 function init() {
   scene = new THREE.Scene();
 
-  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
+  camera = new THREE.PerspectiveCamera(
+    70,
+    window.innerWidth / window.innerHeight,
+    0.01,
+    30
+  );
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -49,8 +51,8 @@ function init() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      requiredFeatures: ["local-floor"],
-      optionalFeatures: ["dom-overlay"],
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["local-floor", "dom-overlay"],
       domOverlay: { root: document.body }
     })
   );
@@ -63,7 +65,7 @@ function init() {
 
   setHUD(
     "PLAYER A: HIDE",
-    `Surface: ${currentSurface.name}\nSqueeze = change surface\nTrigger = place bunny\nHold trigger 2s = hide`
+    "Move slowly and aim at a real surface.\nThe green marker shows detected placement.\nTrigger = place bunny.\nHold trigger 2s = hide."
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -89,7 +91,7 @@ function addController() {
     hideConfirmed = false;
 
     if (mode === "hider") {
-      placeBunnyOnSelectedSurface();
+      placeBunnyOnDetectedSurface();
     }
 
     if (mode === "seeker") {
@@ -99,18 +101,6 @@ function addController() {
 
   controller.addEventListener("selectend", () => {
     triggerHolding = false;
-  });
-
-  controller.addEventListener("squeezestart", () => {
-    if (mode !== "hider") return;
-
-    surfaceIndex = (surfaceIndex + 1) % surfaces.length;
-    currentSurface = surfaces[surfaceIndex];
-
-    setHUD(
-      "SURFACE CHANGED",
-      `Current surface: ${currentSurface.name}\nTrigger = place bunny here\nSqueeze = change surface`
-    );
   });
 
   scene.add(controller);
@@ -139,123 +129,136 @@ function addMarker() {
   );
 
   marker.visible = false;
+  marker.matrixAutoUpdate = false;
   scene.add(marker);
 }
 
-function getControllerRay() {
-  const origin = new THREE.Vector3();
-  origin.setFromMatrixPosition(controller.matrixWorld);
+function updateHitTest(frame) {
+  const session = renderer.xr.getSession();
+  if (!session) return;
 
-  const tempMatrix = new THREE.Matrix4();
-  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  if (!hitTestSourceRequested) {
+    session.requestReferenceSpace("viewer").then((referenceSpace) => {
+      session.requestHitTestSource({ space: referenceSpace }).then((source) => {
+        hitTestSource = source;
+      });
+    });
 
-  const direction = new THREE.Vector3(0, 0, -1);
-  direction.applyMatrix4(tempMatrix).normalize();
+    session.addEventListener("end", () => {
+      hitTestSourceRequested = false;
+      hitTestSource = null;
+      latestHitPosition = null;
+      latestHitNormal = null;
+    });
 
-  return { origin, direction };
-}
-
-function getPlacementPoint() {
-  if (!controller) return null;
-
-  const { origin, direction } = getControllerRay();
-
-  if (currentSurface.type === "horizontal") {
-    if (Math.abs(direction.y) < 0.0001) return null;
-
-    const t = (currentSurface.y - origin.y) / direction.y;
-    if (t <= 0) return null;
-
-    const point = origin.clone().add(direction.multiplyScalar(t));
-    point.y = currentSurface.y;
-
-    return point;
+    hitTestSourceRequested = true;
   }
 
-  if (currentSurface.type === "vertical") {
-    const cameraPos = new THREE.Vector3();
-    camera.getWorldPosition(cameraPos);
+  if (!hitTestSource) return;
 
-    const cameraDir = new THREE.Vector3();
-    camera.getWorldDirection(cameraDir);
-    cameraDir.y = 0;
-    cameraDir.normalize();
+  const referenceSpace = renderer.xr.getReferenceSpace();
+  const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-    const planePoint = cameraPos.clone().add(cameraDir.multiplyScalar(currentSurface.distance));
-    const planeNormal = cameraDir.clone().negate();
-
-    const denom = direction.dot(planeNormal);
-    if (Math.abs(denom) < 0.0001) return null;
-
-    const t = planePoint.clone().sub(origin).dot(planeNormal) / denom;
-    if (t <= 0) return null;
-
-    return origin.clone().add(direction.multiplyScalar(t));
-  }
-
-  return null;
-}
-
-function updateMarker() {
-  if (mode !== "hider" || bunnyHidden || gameFinished) {
+  if (hitTestResults.length === 0) {
     marker.visible = false;
+    latestHitPosition = null;
+    latestHitNormal = null;
+    latestSurfaceLabel = "No surface detected";
     return;
   }
 
-  const point = getPlacementPoint();
+  const hit = hitTestResults[0];
+  const pose = hit.getPose(referenceSpace);
 
-  if (!point) {
-    marker.visible = false;
-    return;
-  }
+  const matrix = new THREE.Matrix4();
+  matrix.fromArray(pose.transform.matrix);
+
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+
+  matrix.decompose(position, quaternion, scale);
+
+  const normal = new THREE.Vector3(0, 1, 0);
+  normal.applyQuaternion(quaternion).normalize();
+
+  latestHitPosition = position;
+  latestHitNormal = normal;
+  latestSurfaceLabel = classifySurface(position, normal);
 
   marker.visible = true;
-  marker.position.copy(point);
-
-  if (currentSurface.type === "horizontal") {
-    marker.rotation.set(-Math.PI / 2, 0, 0);
-  } else {
-    marker.lookAt(camera.position);
-  }
+  marker.matrix.copy(matrix);
 }
 
-function placeBunnyOnSelectedSurface() {
-  const point = getPlacementPoint();
+function classifySurface(position, normal) {
+  const y = position.y;
+  const horizontal = Math.abs(normal.y) > 0.65;
+  const vertical = Math.abs(normal.y) < 0.35;
 
-  if (!point) {
+  if (horizontal && y < 0.25) {
+    return "Floor Surface";
+  }
+
+  if (horizontal && y >= 0.45 && y <= 1.05) {
+    return "Desk / Table Surface";
+  }
+
+  if (horizontal && y > 1.05) {
+    return "Bookshelf / High Shelf Surface";
+  }
+
+  if (vertical && y >= 0.5 && y <= 2.2) {
+    return "Wall / Glass / Bookshelf Side";
+  }
+
+  if (vertical && y > 2.2) {
+    return "High Wall / Window Surface";
+  }
+
+  return "Study Room Surface";
+}
+
+function placeBunnyOnDetectedSurface() {
+  if (!latestHitPosition || !latestHitNormal) {
     setHUD(
-      "NO VALID HIT",
-      `Current surface: ${currentSurface.name}\nAim the controller ray at the selected surface.`
+      "NO SURFACE DETECTED",
+      "Move the headset slowly.\nAim at floor, desk, shelf, wall, or glass.\nWait for the green marker."
     );
     return;
   }
 
-  bunny.position.copy(point);
+  const offset = latestHitNormal.clone().multiplyScalar(0.035);
+  bunny.position.copy(latestHitPosition.clone().add(offset));
 
-  if (currentSurface.type === "horizontal") {
-    bunny.position.y = currentSurface.y;
-    bunny.rotation.x = 0;
-    bunny.rotation.z = 0;
-  } else {
-    const camPos = new THREE.Vector3();
-    camera.getWorldPosition(camPos);
-    bunny.lookAt(camPos);
-    bunny.rotation.x = 0;
-    bunny.rotation.z = 0;
-  }
+  orientBunnyToSurface(latestHitNormal);
 
   bunny.visible = true;
   bunnyPlaced = true;
   bunnyHidden = false;
   gameFinished = false;
-  hiddenSurface = currentSurface;
+  hiddenSurfaceLabel = latestSurfaceLabel;
 
   setBunnyColor(0xffffff);
 
   setHUD(
     "BUNNY PLACED",
-    `Placed on: ${currentSurface.name}\nSqueeze = change surface\nTrigger = move bunny\nHold trigger 2s = hide`
+    `Detected: ${hiddenSurfaceLabel}\nTrigger again to move it.\nHold trigger 2s to hide.`
   );
+}
+
+function orientBunnyToSurface(normal) {
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+
+  bunny.lookAt(camPos);
+
+  if (Math.abs(normal.y) > 0.65) {
+    bunny.rotation.x = 0;
+    bunny.rotation.z = 0;
+  } else {
+    bunny.rotation.x = 0;
+    bunny.rotation.z = 0;
+  }
 }
 
 function confirmHide() {
@@ -271,7 +274,7 @@ function confirmHide() {
 
   setHUD(
     "BUNNY HIDDEN!",
-    `Hidden on: ${hiddenSurface.name}\nPlayer B starts now\nTime: 60s`
+    `Hidden on: ${hiddenSurfaceLabel}\nPlayer B starts now.\nTime: 60s`
   );
 }
 
@@ -308,7 +311,7 @@ function updateSeekerGame() {
 
   setHUD(
     "PLAYER B: SEARCH",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${hiddenSurface.hint}${warning}`
+    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nSurface Hint: ${hiddenSurfaceLabel}${warning}`
   );
 
   if (distance <= foundDistance) {
@@ -344,10 +347,12 @@ function checkBunnyByRay() {
   if (!bunnyPlaced || !bunnyHidden || gameFinished) return;
 
   const raycaster = new THREE.Raycaster();
-  const { origin, direction } = getControllerRay();
+  const tempMatrix = new THREE.Matrix4();
 
-  raycaster.ray.origin.copy(origin);
-  raycaster.ray.direction.copy(direction);
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
 
   bunny.visible = true;
   const hits = raycaster.intersectObject(bunny, true);
@@ -367,7 +372,7 @@ function playerBWins() {
 
   setHUD(
     "BUNNY FOUND!",
-    `Player B wins.\nThe bunny was hidden on:\n${hiddenSurface.name}`
+    `Player B wins.\nThe bunny was hidden on:\n${hiddenSurfaceLabel}`
   );
 }
 
@@ -380,7 +385,7 @@ function playerBLoses() {
 
   setHUD(
     "TIME IS UP!",
-    `Player B loses.\nThe bunny was hidden on:\n${hiddenSurface.name}`
+    `Player B loses.\nThe bunny was hidden on:\n${hiddenSurfaceLabel}`
   );
 }
 
@@ -570,8 +575,10 @@ function updateHUDPosition() {
   hudPanel.lookAt(camPos);
 }
 
-function render() {
-  updateMarker();
+function render(timestamp, frame) {
+  if (frame) {
+    updateHitTest(frame);
+  }
 
   if (triggerHolding && mode === "hider" && bunnyPlaced && !bunnyHidden) {
     const held = (performance.now() - triggerStartTime) / 1000;
