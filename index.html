@@ -10,81 +10,44 @@
       margin: 0;
       overflow: hidden;
       font-family: Arial, sans-serif;
-      background: #111827;
+      background: #000;
     }
 
-    #hud {
+    #overlay {
       position: absolute;
-      top: 20px;
-      left: 20px;
-      width: 340px;
+      top: 18px;
+      left: 18px;
       z-index: 10;
+      width: 320px;
+      padding: 16px;
+      border-radius: 16px;
       color: white;
-      background: rgba(15, 23, 42, 0.88);
-      padding: 18px;
-      border-radius: 18px;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      font-size: 14px;
+      line-height: 1.45;
     }
 
     h1 {
-      margin: 0 0 10px;
-      font-size: 24px;
+      margin: 0 0 8px;
+      font-size: 22px;
     }
 
-    button {
-      margin: 5px 4px;
-      padding: 11px 13px;
-      border: none;
-      border-radius: 12px;
-      color: white;
-      font-weight: bold;
-      background: #2563eb;
-      cursor: pointer;
-    }
-
-    #confirmButton {
-      background: #16a34a;
-    }
-
-    #searchButton {
-      background: #f97316;
-    }
-
-    #resetButton {
-      background: #dc2626;
-    }
-
-    #status, #distance, #direction {
-      margin-top: 10px;
-      font-weight: bold;
-    }
-
-    #tip {
-      margin-top: 12px;
-      font-size: 13px;
+    .small {
       color: #cbd5e1;
-      line-height: 1.4;
+      font-size: 13px;
     }
   </style>
 </head>
 
 <body>
-  <div id="hud">
+  <div id="overlay">
     <h1>🐰 AR Bunny Hide & Seek</h1>
-
-    <button onclick="setMode('hider')">Player A: Hide</button>
-    <button id="confirmButton" onclick="confirmHide()">Confirm Hide</button>
-    <button id="searchButton" onclick="setMode('seeker')">Player B: Search</button>
-    <button id="resetButton" onclick="resetGame()">Reset</button>
-
-    <div id="status">Status: Enter AR first.</div>
-    <div id="distance">Distance: --</div>
-    <div id="direction">Direction: --</div>
-
-    <div id="tip">
-      Quest 3: open this page in Meta Quest Browser, press ENTER AR, then use the controller trigger.
-      <br />
-      Player A places the bunny. Player B searches using distance and direction hints.
+    <div class="small">
+      Quest 3: press ENTER AR.<br />
+      Player A: short press trigger to move bunny.<br />
+      Hold trigger for 2 seconds to hide.<br />
+      Player B: follow the 3D distance and direction hint.
     </div>
   </div>
 
