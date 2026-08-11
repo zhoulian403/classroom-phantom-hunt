@@ -3,50 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Study Room AR Bunny Hunt</title>
-
+  <title>Silent Study Challenge</title>
   <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #172033;
+      background: #f4efe6;
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      overflow: hidden;
-      font-family: Arial, sans-serif;
-      background: #000;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 15%, rgba(255,255,255,.95), transparent 32%),
+        linear-gradient(135deg, #f9f3e8 0%, #e8f0e9 100%);
     }
-
-    #overlay {
-      position: absolute;
-      top: 18px;
-      left: 18px;
-      z-index: 10;
-      width: 340px;
-      padding: 16px;
-      border-radius: 16px;
-      color: white;
-      background: rgba(15, 23, 42, 0.75);
-      backdrop-filter: blur(8px);
-      font-size: 14px;
-      line-height: 1.45;
+    #landing {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      padding: 24px;
     }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 22px;
+    .panel {
+      pointer-events: auto;
+      width: min(390px, calc(100vw - 48px));
+      padding: 22px;
+      border-radius: 22px;
+      background: rgba(255,255,255,.9);
+      box-shadow: 0 18px 60px rgba(49,55,70,.18);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,.7);
     }
-
-    .small {
-      color: #cbd5e1;
+    h1 { margin: 0 0 6px; font-size: 27px; }
+    .tag { margin: 0 0 18px; color: #647084; font-size: 14px; }
+    .roles {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .role {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #f7f8fb;
       font-size: 13px;
+      line-height: 1.5;
     }
+    .code-sheet {
+      border: 2px dashed #8aa89a;
+      border-radius: 16px;
+      padding: 14px;
+      background: #fbfff9;
+      margin-top: 14px;
+    }
+    .code-sheet h2 { margin: 0 0 8px; font-size: 16px; }
+    .question { font-size: 18px; font-weight: 700; margin: 7px 0; }
+    .answer-line { letter-spacing: 8px; font-size: 20px; margin-top: 10px; }
+    .small { font-size: 12px; line-height: 1.5; color: #647084; }
+    #enter-ar-note { margin-top: 14px; font-weight: 700; color: #375c4b; }
   </style>
 </head>
-
 <body>
-  <div id="overlay">
-    <h1>🐰 Study Room AR Bunny Hunt</h1>
-    <div class="small">
-      Player A: point at a study-room feature and place the bunny.<br />
-      Valid hiding zones: desk, bookshelf, window, entrance, quiet corner.<br />
-      Hold trigger for 2 seconds to hide. Player B follows the AR hints.
+  <div id="landing">
+    <div class="panel">
+      <h1>🐰 Silent Study Challenge</h1>
+      <p class="tag">A synchronous mixed-reality game for a real study room</p>
+
+      <div class="roles">
+        <div class="role"><strong>Player A — Quest 3</strong><br>Find the hidden virtual bunny using distance and direction hints. When you find it, unlock it with Player B's code.</div>
+        <div class="role"><strong>Player B — Code Breaker</strong><br>Solve the three study questions at the same time. Keep the final 3-digit code secret until Player A finds the bunny.</div>
+      </div>
+
+      <div class="code-sheet">
+        <h2>Player B — Code Breaker Sheet</h2>
+        <div class="question">1) 9 − 6 = ____</div>
+        <div class="question">2) 4 × 2 = ____</div>
+        <div class="question">3) 12 ÷ 2 = ____</div>
+        <div class="answer-line">CODE: _ _ _</div>
+      </div>
+
+      <div id="enter-ar-note">Player A: press ENTER AR below to begin setup.</div>
+      <p class="small">Setup is completed before the timed game starts. During the timed round, both players act simultaneously.</p>
     </div>
   </div>
 

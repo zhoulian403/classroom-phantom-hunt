@@ -2,37 +2,44 @@ import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 
 let scene, camera, renderer, controller;
-let bunny, marker, hudPanel;
+let bunny, marker, hudPanel, keypadGroup;
 let controllerInput = null;
 
-let mode = "hider";
-let bunnyPlaced = false;
-let bunnyHidden = false;
+let mode = "setup"; // setup -> searching -> keypad -> finished
+let targetPlaced = false;
 let gameFinished = false;
-
-let placementDistance = 1.4;
-let triggerStartTime = 0;
+let placementDistance = 1.5;
 let triggerDown = false;
+let triggerStartTime = 0;
 
-let seekerTimeLeft = 60;
+let timeLeft = 60;
 let lastTimerUpdate = 0;
+let enteredCode = "";
 
+const CORRECT_CODE = "386";
+const foundDistance = 0.7;
 const minDistance = 0.25;
 const maxDistance = 6;
-const foundDistance = 0.45;
+
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
 
 init();
 
 function init() {
   scene = new THREE.Scene();
 
-  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 30);
+  camera = new THREE.PerspectiveCamera(
+    70,
+    window.innerWidth / window.innerHeight,
+    0.01,
+    30
+  );
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
-
   document.body.appendChild(renderer.domElement);
 
   document.body.appendChild(
@@ -48,17 +55,20 @@ function init() {
   addMarker();
   addBunny();
   addHUD();
+  addKeypad();
 
-  setHUD("PLAYER A", "Aim controller.\nThumbstick up/down adjusts depth.\nShort press = place bunny.\nHold 2s = hide.");
+  setHUD(
+    "SETUP — PLAYER A",
+    "Choose the target position before the game starts.\nAim the green marker at a real study desk/chair area.\nThumbstick up/down = depth.\nTrigger = set target. Squeeze = START GAME."
+  );
 
   window.addEventListener("resize", onWindowResize);
   renderer.setAnimationLoop(render);
 }
 
 function addLights() {
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.8));
-
-  const light = new THREE.DirectionalLight(0xffffff, 1.2);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445047, 1.8));
+  const light = new THREE.DirectionalLight(0xffffff, 1.25);
   light.position.set(2, 4, 2);
   scene.add(light);
 }
@@ -78,21 +88,25 @@ function addController() {
 
   controller.addEventListener("selectend", () => {
     if (gameFinished) return;
-
-    const held = (performance.now() - triggerStartTime) / 1000;
     triggerDown = false;
 
-    if (mode === "hider") {
-      if (held >= 2 && bunnyPlaced) {
-        hideBunny();
-      } else {
-        placeBunny();
-      }
+    if (mode === "setup") {
+      placeTarget();
+      return;
     }
 
-    if (mode === "seeker") {
-      checkBunnyByRay();
+    if (mode === "searching") {
+      trySelectBunny();
+      return;
     }
+
+    if (mode === "keypad") {
+      trySelectKeypadButton();
+    }
+  });
+
+  controller.addEventListener("squeezestart", () => {
+    if (mode === "setup") startMission();
   });
 
   scene.add(controller);
@@ -102,70 +116,79 @@ function addController() {
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, 0, -1)
     ]),
-    new THREE.LineBasicMaterial({ color: 0x00ff88 })
+    new THREE.LineBasicMaterial({ color: 0x7cffb2 })
   );
-
+  line.name = "controller-ray";
   line.scale.z = 6;
   controller.add(line);
 }
 
 function updatePlacementDistance() {
   if (!controllerInput?.gamepad?.axes) return;
-
   const axes = controllerInput.gamepad.axes;
   const y = axes[3] ?? axes[1] ?? 0;
-
   if (Math.abs(y) > 0.12) {
     placementDistance -= y * 0.035;
-    placementDistance = THREE.MathUtils.clamp(placementDistance, minDistance, maxDistance);
+    placementDistance = THREE.MathUtils.clamp(
+      placementDistance,
+      minDistance,
+      maxDistance
+    );
   }
 }
 
+function getControllerRay() {
+  const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  const direction = new THREE.Vector3(0, 0, -1)
+    .applyMatrix4(tempMatrix)
+    .normalize();
+  return { origin, direction };
+}
+
 function getControllerRayPoint() {
-  const origin = new THREE.Vector3();
-  origin.setFromMatrixPosition(controller.matrixWorld);
-
-  const rotation = new THREE.Matrix4();
-  rotation.extractRotation(controller.matrixWorld);
-
-  const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(rotation).normalize();
-
-  return origin.add(direction.multiplyScalar(placementDistance));
+  const { origin, direction } = getControllerRay();
+  return origin.clone().add(direction.multiplyScalar(placementDistance));
 }
 
 function addMarker() {
   marker = new THREE.Group();
 
-  const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(0.045, 24, 24),
-    new THREE.MeshBasicMaterial({ color: 0x00ff88 })
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.035, 20, 20),
+    new THREE.MeshBasicMaterial({ color: 0x7cffb2 })
   );
 
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.08, 0.11, 32),
-    new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide })
+    new THREE.RingGeometry(0.075, 0.105, 36),
+    new THREE.MeshBasicMaterial({
+      color: 0x7cffb2,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide
+    })
   );
   ring.rotation.x = -Math.PI / 2;
 
-  marker.add(sphere, ring);
+  marker.add(dot, ring);
+  marker.visible = false;
   scene.add(marker);
 }
 
 function updateMarker() {
-  if (mode !== "hider" || bunnyHidden || gameFinished) {
+  if (mode !== "setup") {
     marker.visible = false;
     return;
   }
 
   updatePlacementDistance();
-
   marker.position.copy(getControllerRayPoint());
   marker.visible = true;
 
   if (!triggerDown) {
     setHUD(
-      "PLAYER A",
-      `Green point = bunny position.\nThumbstick adjusts depth.\nDistance: ${placementDistance.toFixed(2)}m\nShort press = place. Hold 2s = hide.`
+      "SETUP — PLAYER A",
+      `Green marker = target location.\nDepth: ${placementDistance.toFixed(2)} m\nTrigger = set / move target.\nSqueeze = START GAME when ready.`
     );
   }
 }
@@ -173,9 +196,9 @@ function updateMarker() {
 function addBunny() {
   bunny = new THREE.Group();
 
-  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 });
   const pink = new THREE.MeshStandardMaterial({ color: 0xff9eb5, roughness: 0.7 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x171717, roughness: 0.4 });
 
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.09, 32, 32), white);
   body.scale.set(1, 1.15, 0.95);
@@ -192,99 +215,121 @@ function addBunny() {
   earR.position.x = 0.035;
   earR.rotation.z = -0.18;
 
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.01, 16, 16), black);
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.01, 16, 16), dark);
   eyeL.position.set(-0.028, 0.23, 0.073);
-
   const eyeR = eyeL.clone();
   eyeR.position.x = 0.028;
 
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 16), pink);
   nose.position.set(0, 0.2, 0.082);
 
-  const blushL = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), pink);
-  blushL.position.set(-0.048, 0.195, 0.074);
-
-  const blushR = blushL.clone();
-  blushR.position.x = 0.048;
-
   const footL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 16, 16), white);
   footL.scale.set(1.35, 0.55, 0.9);
   footL.position.set(-0.038, 0.005, 0.04);
-
   const footR = footL.clone();
   footR.position.x = 0.038;
 
-  bunny.add(body, head, earL, earR, eyeL, eyeR, nose, blushL, blushR, footL, footR);
-  bunny.scale.set(0.75, 0.75, 0.75);
+  bunny.add(body, head, earL, earR, eyeL, eyeR, nose, footL, footR);
+  bunny.scale.set(0.9, 0.9, 0.9);
   bunny.visible = false;
-
   scene.add(bunny);
 }
 
-function placeBunny() {
+function placeTarget() {
   if (!marker.visible) return;
-
   bunny.position.copy(marker.position);
   faceBunnyToUser();
   bunny.visible = true;
+  targetPlaced = true;
 
-  bunnyPlaced = true;
-  bunnyHidden = false;
-
-  setHUD("BUNNY PLACED", "Adjust green point if needed.\nShort press = move bunny.\nHold trigger 2s = hide.");
+  setHUD(
+    "TARGET SET",
+    "The bunny position is ready.\nMove the marker and press Trigger to reposition,\nor press Squeeze to start the 60-second mission."
+  );
 }
 
-function hideBunny() {
-  bunny.visible = false;
-  bunnyHidden = true;
-  mode = "seeker";
-  seekerTimeLeft = 60;
-  lastTimerUpdate = performance.now();
-
-  setHUD("BUNNY HIDDEN", "Player B starts now.\nFind the bunny before time runs out.");
-}
-
-function updateSeekerGame() {
-  if (mode !== "seeker" || gameFinished) return;
-
-  const now = performance.now();
-
-  if (now - lastTimerUpdate >= 1000) {
-    seekerTimeLeft--;
-    lastTimerUpdate = now;
-  }
-
-  if (seekerTimeLeft <= 0) {
-    endGame(false);
+function startMission() {
+  if (!targetPlaced) {
+    setHUD(
+      "TARGET NOT SET",
+      "Place the bunny target first with Trigger,\nthen press Squeeze to start."
+    );
     return;
   }
 
-  const camPos = new THREE.Vector3();
-  camera.getWorldPosition(camPos);
+  mode = "searching";
+  bunny.visible = false;
+  marker.visible = false;
+  keypadGroup.visible = false;
+  enteredCode = "";
+  timeLeft = 60;
+  lastTimerUpdate = performance.now();
+
+  setHUD(
+    "MISSION START",
+    "Player A: find the hidden bunny.\nPlayer B: solve the three maths questions NOW.\nBoth players are active at the same time."
+  );
+}
+
+function updateSearchGame() {
+  if (mode !== "searching" || gameFinished) return;
+
+  updateTimer();
+  if (gameFinished) return;
+
+  const cameraPos = new THREE.Vector3();
+  camera.getWorldPosition(cameraPos);
 
   const bunnyPos = new THREE.Vector3();
   bunny.getWorldPosition(bunnyPos);
 
-  const distance = camPos.distanceTo(bunnyPos);
-  const direction = getDirectionHint(camPos, bunnyPos);
+  const distance = cameraPos.distanceTo(bunnyPos);
+  const direction = getDirectionHint(cameraPos, bunnyPos);
 
   let warning = "";
-  if (seekerTimeLeft <= 10) warning = "\nHURRY UP!";
-  else if (seekerTimeLeft <= 20) warning = "\nTime is running out.";
-
-  setHUD(
-    "PLAYER B",
-    `Time: ${seekerTimeLeft}s\nDistance: ${distance.toFixed(2)}m\nDirection: ${direction}${warning}`
-  );
+  if (timeLeft <= 10) warning = "\nHURRY — only a few seconds left!";
+  else if (timeLeft <= 20) warning = "\nTime is running out.";
 
   if (distance <= foundDistance) {
-    endGame(true);
+    bunny.visible = true;
+    setHUD(
+      "BUNNY FOUND!",
+      `Time: ${timeLeft}s\nAim at the bunny and press Trigger to unlock it.\nYou will need Player B's 3-digit code.${warning}`
+    );
+  } else {
+    bunny.visible = false;
+    setHUD(
+      "PLAYER A — SEARCH",
+      `Time: ${timeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nPlayer B should be solving the code.${warning}`
+    );
+  }
+}
+
+function updateTimer() {
+  const now = performance.now();
+  if (now - lastTimerUpdate >= 1000) {
+    const secondsPassed = Math.floor((now - lastTimerUpdate) / 1000);
+    timeLeft -= secondsPassed;
+    lastTimerUpdate += secondsPassed * 1000;
+  }
+
+  if (timeLeft <= 0) {
+    timeLeft = 0;
+    finishGame(false, "TIME'S UP", "The team did not unlock the bunny in time.");
   }
 }
 
 function getDirectionHint(cameraPos, targetPos) {
   const toTarget = targetPos.clone().sub(cameraPos);
+  const verticalDifference = toTarget.y;
   toTarget.y = 0;
+
+  if (toTarget.lengthSq() < 0.0001) {
+    if (verticalDifference > 0.35) return "Above you";
+    if (verticalDifference < -0.35) return "Below you";
+    return "Very close";
+  }
+
   toTarget.normalize();
 
   const forward = new THREE.Vector3();
@@ -292,49 +337,171 @@ function getDirectionHint(cameraPos, targetPos) {
   forward.y = 0;
   forward.normalize();
 
-  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+  const right = new THREE.Vector3()
+    .crossVectors(forward, new THREE.Vector3(0, 1, 0))
+    .normalize();
 
   const f = toTarget.dot(forward);
   const r = toTarget.dot(right);
 
-  if (f > 0.65) return "In front";
-  if (f < -0.65) return "Behind";
-  if (r > 0.25) return "Right";
-  if (r < -0.25) return "Left";
-  return "Very close";
+  let horizontal;
+  if (f > 0.65) horizontal = "In front";
+  else if (f < -0.65) horizontal = "Behind";
+  else if (r > 0.25) horizontal = "Right";
+  else if (r < -0.25) horizontal = "Left";
+  else horizontal = "Nearby";
+
+  if (verticalDifference > 0.5) return `${horizontal} / higher`;
+  if (verticalDifference < -0.5) return `${horizontal} / lower`;
+  return horizontal;
 }
 
-function checkBunnyByRay() {
-  const origin = new THREE.Vector3();
-  origin.setFromMatrixPosition(controller.matrixWorld);
+function trySelectBunny() {
+  if (mode !== "searching" || !bunny.visible) return;
 
-  const rotation = new THREE.Matrix4();
-  rotation.extractRotation(controller.matrixWorld);
-
-  const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(rotation).normalize();
-
-  const raycaster = new THREE.Raycaster(origin, direction);
-
-  bunny.visible = true;
+  const { origin, direction } = getControllerRay();
+  raycaster.set(origin, direction);
   const hits = raycaster.intersectObject(bunny, true);
-  bunny.visible = false;
 
-  if (hits.length > 0) endGame(true);
+  if (hits.length > 0) {
+    openKeypad();
+  }
 }
 
-function endGame(win) {
+function addKeypad() {
+  keypadGroup = new THREE.Group();
+  keypadGroup.visible = false;
+
+  const panel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.95, 1.18),
+    new THREE.MeshBasicMaterial({ color: 0x172033, transparent: true, opacity: 0.95 })
+  );
+  panel.position.z = -0.015;
+  keypadGroup.add(panel);
+
+  const labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "CLR", "0", "OK"];
+  labels.forEach((label, index) => {
+    const col = index % 3;
+    const row = Math.floor(index / 3);
+    const x = -0.29 + col * 0.29;
+    const y = 0.27 - row * 0.25;
+    keypadGroup.add(createKeyButton(label, x, y));
+  });
+
+  scene.add(keypadGroup);
+}
+
+function createKeyButton(label, x, y) {
+  const group = new THREE.Group();
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 160;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = label === "OK" ? "#3f765e" : label === "CLR" ? "#7c4d57" : "#f6f1e8";
+  roundRect(ctx, 4, 4, 248, 152, 22);
+  ctx.fill();
+  ctx.fillStyle = label === "OK" || label === "CLR" ? "#ffffff" : "#172033";
+  ctx.font = "bold 62px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, 128, 82);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const button = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.23, 0.16),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true })
+  );
+  button.userData.keypadValue = label;
+  group.add(button);
+  group.position.set(x, y, 0.01);
+  return group;
+}
+
+function openKeypad() {
+  mode = "keypad";
+  enteredCode = "";
+  bunny.visible = true;
+
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+
+  keypadGroup.position.copy(camPos.clone().add(camDir.multiplyScalar(1.15)));
+  keypadGroup.position.y -= 0.05;
+  keypadGroup.lookAt(camPos);
+  keypadGroup.visible = true;
+
+  setHUD(
+    "BUNNY LOCKED",
+    `Time: ${timeLeft}s\nAsk Player B for the 3-digit code.\nEntered code: ---\nUse the controller ray to press the keypad.`
+  );
+}
+
+function trySelectKeypadButton() {
+  if (mode !== "keypad" || !keypadGroup.visible) return;
+
+  updateTimer();
+  if (gameFinished) return;
+
+  const { origin, direction } = getControllerRay();
+  raycaster.set(origin, direction);
+  const hits = raycaster.intersectObjects(keypadGroup.children, true);
+  const hit = hits.find((item) => item.object.userData.keypadValue);
+  if (!hit) return;
+
+  handleKeypadValue(hit.object.userData.keypadValue);
+}
+
+function handleKeypadValue(value) {
+  if (value === "CLR") {
+    enteredCode = "";
+  } else if (value === "OK") {
+    if (enteredCode === CORRECT_CODE) {
+      finishGame(true, "MISSION COMPLETE!", "Correct code: 386. Player A and Player B win together.");
+      return;
+    }
+
+    enteredCode = "";
+    timeLeft = Math.max(0, timeLeft - 5);
+    setHUD(
+      "WRONG CODE",
+      `5-second penalty!\nTime: ${timeLeft}s\nAsk Player B to check the maths and try again.`
+    );
+    return;
+  } else if (enteredCode.length < 3) {
+    enteredCode += value;
+  }
+
+  const display = enteredCode.padEnd(3, "-");
+  setHUD(
+    "BUNNY LOCKED",
+    `Time: ${timeLeft}s\nPlayer B must provide the code.\nEntered code: ${display}\nPress OK when ready.`
+  );
+}
+
+function finishGame(win, title, message) {
   gameFinished = true;
   mode = "finished";
-  bunnyHidden = false;
+  keypadGroup.visible = false;
   bunny.visible = true;
 
-  setHUD(win ? "FOUND!" : "TIME UP", win ? "Player B wins." : "The bunny is revealed.");
+  bunny.traverse((child) => {
+    if (child.isMesh && child.material?.color) {
+      const current = child.material.color.getHex();
+      if (current === 0xffffff) {
+        child.material.color.set(win ? 0x8ee6aa : 0x9cb8ff);
+      }
+    }
+  });
+
+  setHUD(title, message);
 }
 
 function faceBunnyToUser() {
   const camPos = new THREE.Vector3();
   camera.getWorldPosition(camPos);
-
   bunny.lookAt(camPos);
   bunny.rotation.x = 0;
   bunny.rotation.z = 0;
@@ -342,19 +509,14 @@ function faceBunnyToUser() {
 
 function addHUD() {
   const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 512;
+  canvas.width = 1200;
+  canvas.height = 620;
 
   const texture = new THREE.CanvasTexture(canvas);
-
-  hudPanel = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.35, 0.68),
-    new THREE.MeshBasicMaterial({ map: texture, transparent: true })
-  );
-
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+  hudPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.42, 0.74), material);
   hudPanel.userData.canvas = canvas;
   hudPanel.userData.texture = texture;
-
   scene.add(hudPanel);
 }
 
@@ -363,30 +525,64 @@ function setHUD(title, body) {
 
   const canvas = hudPanel.userData.canvas;
   const ctx = canvas.getContext("2d");
-
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 44);
+  ctx.fillStyle = "rgba(20, 28, 42, 0.90)";
+  roundRect(ctx, 0, 0, canvas.width, canvas.height, 50);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.strokeStyle = "rgba(124,255,178,0.55)";
   ctx.lineWidth = 8;
-  roundRect(ctx, 6, 6, canvas.width - 12, canvas.height - 12, 40);
+  roundRect(ctx, 7, 7, canvas.width - 14, canvas.height - 14, 45);
   ctx.stroke();
 
-  ctx.fillStyle = "#fde047";
-  ctx.font = "bold 58px Arial";
-  ctx.fillText(title, 48, 96);
+  ctx.fillStyle = "#9fffc3";
+  ctx.font = "bold 63px Arial";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(title, 50, 105);
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "38px Arial";
-
+  ctx.font = "39px Arial";
   body.split("\n").forEach((line, i) => {
-    ctx.fillText(line, 48, 170 + i * 54);
+    ctx.fillText(line, 50, 185 + i * 60);
   });
 
   hudPanel.userData.texture.needsUpdate = true;
+}
+
+function updateHUDPosition() {
+  if (!hudPanel) return;
+
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+
+  const targetPosition = camPos.clone().add(camDir.multiplyScalar(1.35));
+  targetPosition.y += 0.12;
+  hudPanel.position.lerp(targetPosition, 0.22);
+  hudPanel.lookAt(camPos);
+}
+
+function render() {
+  updateMarker();
+
+  if (mode === "searching") updateSearchGame();
+  if (mode === "keypad") updateTimer();
+
+  if (triggerDown && mode === "setup") {
+    const held = (performance.now() - triggerStartTime) / 1000;
+    if (held > 0.8) {
+      setHUD(
+        "SETUP",
+        "Release Trigger to set the target.\nPress Squeeze afterwards to start the timed game."
+      );
+    }
+  }
+
+  updateHUDPosition();
+  renderer.render(scene, camera);
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -397,35 +593,6 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
-}
-
-function updateHUDPosition() {
-  const camPos = new THREE.Vector3();
-  camera.getWorldPosition(camPos);
-
-  const camDir = new THREE.Vector3();
-  camera.getWorldDirection(camDir);
-
-  hudPanel.position.copy(camPos.add(camDir.multiplyScalar(1.25)));
-  hudPanel.position.y += 0.05;
-  hudPanel.lookAt(camera.position);
-}
-
-function render() {
-  updateMarker();
-
-  if (triggerDown && mode === "hider" && bunnyPlaced && !bunnyHidden) {
-    const held = (performance.now() - triggerStartTime) / 1000;
-
-    if (held < 2) {
-      setHUD("HOLD TO HIDE", `${held.toFixed(1)} / 2.0 seconds`);
-    }
-  }
-
-  updateHUDPosition();
-  updateSeekerGame();
-
-  renderer.render(scene, camera);
 }
 
 function onWindowResize() {
