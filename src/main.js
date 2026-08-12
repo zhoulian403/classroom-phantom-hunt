@@ -5,21 +5,27 @@ let scene, camera, renderer, controller;
 let bunny, marker, hudPanel, keypadGroup;
 let controllerInput = null;
 
-let mode = "setup"; // setup -> searching -> keypad -> finished
-let targetPlaced = false;
+// Game flow:
+// calibration -> ready -> searching -> keypad -> finished
+let mode = "calibration";
 let gameFinished = false;
+
+// Three real-space target points are calibrated before gameplay.
+const targetSlots = [];
+const REQUIRED_TARGETS = 3;
+let selectedTargetIndex = -1;
+
+// Manual depth is only used during admin calibration.
 let placementDistance = 1.5;
-let triggerDown = false;
-let triggerStartTime = 0;
+const minDistance = 0.35;
+const maxDistance = 6;
 
 let timeLeft = 60;
 let lastTimerUpdate = 0;
 let enteredCode = "";
 
 const CORRECT_CODE = "386";
-const foundDistance = 0.7;
-const minDistance = 0.25;
-const maxDistance = 6;
+const revealDistance = 0.75;
 
 const raycaster = new THREE.Raycaster();
 const tempMatrix = new THREE.Matrix4();
@@ -58,8 +64,8 @@ function init() {
   addKeypad();
 
   setHUD(
-    "SETUP — PLAYER A",
-    "Choose the target position before the game starts.\nAim the green marker at a real study desk/chair area.\nThumbstick up/down = depth.\nTrigger = set target. Squeeze = START GAME."
+    "ADMIN CALIBRATION 1/3",
+    "Before the game: save 3 possible desk locations.\nAim green marker at a different real desk area.\nThumbstick up/down = adjust depth.\nTrigger = save this location."
   );
 
   window.addEventListener("resize", onWindowResize);
@@ -80,18 +86,11 @@ function addController() {
     controllerInput = event.data;
   });
 
-  controller.addEventListener("selectstart", () => {
-    if (gameFinished) return;
-    triggerDown = true;
-    triggerStartTime = performance.now();
-  });
-
   controller.addEventListener("selectend", () => {
     if (gameFinished) return;
-    triggerDown = false;
 
-    if (mode === "setup") {
-      placeTarget();
+    if (mode === "calibration") {
+      saveCalibrationPoint();
       return;
     }
 
@@ -106,7 +105,9 @@ function addController() {
   });
 
   controller.addEventListener("squeezestart", () => {
-    if (mode === "setup") startMission();
+    if (mode === "ready") {
+      startMission();
+    }
   });
 
   scene.add(controller);
@@ -127,6 +128,7 @@ function updatePlacementDistance() {
   if (!controllerInput?.gamepad?.axes) return;
   const axes = controllerInput.gamepad.axes;
   const y = axes[3] ?? axes[1] ?? 0;
+
   if (Math.abs(y) > 0.12) {
     placementDistance -= y * 0.035;
     placementDistance = THREE.MathUtils.clamp(
@@ -155,16 +157,16 @@ function addMarker() {
   marker = new THREE.Group();
 
   const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(0.035, 20, 20),
+    new THREE.SphereGeometry(0.03, 20, 20),
     new THREE.MeshBasicMaterial({ color: 0x7cffb2 })
   );
 
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.075, 0.105, 36),
+    new THREE.RingGeometry(0.07, 0.095, 36),
     new THREE.MeshBasicMaterial({
       color: 0x7cffb2,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.9,
       side: THREE.DoubleSide
     })
   );
@@ -176,7 +178,7 @@ function addMarker() {
 }
 
 function updateMarker() {
-  if (mode !== "setup") {
+  if (mode !== "calibration") {
     marker.visible = false;
     return;
   }
@@ -184,13 +186,28 @@ function updateMarker() {
   updatePlacementDistance();
   marker.position.copy(getControllerRayPoint());
   marker.visible = true;
+}
 
-  if (!triggerDown) {
+function saveCalibrationPoint() {
+  if (!marker.visible || targetSlots.length >= REQUIRED_TARGETS) return;
+
+  targetSlots.push(marker.position.clone());
+
+  if (targetSlots.length < REQUIRED_TARGETS) {
     setHUD(
-      "SETUP — PLAYER A",
-      `Green marker = target location.\nDepth: ${placementDistance.toFixed(2)} m\nTrigger = set / move target.\nSqueeze = START GAME when ready.`
+      `ADMIN CALIBRATION ${targetSlots.length + 1}/${REQUIRED_TARGETS}`,
+      `Saved location ${targetSlots.length}.\nAim at a DIFFERENT real desk/chair area.\nDepth: ${placementDistance.toFixed(2)} m\nTrigger = save next location.`
     );
+    return;
   }
+
+  mode = "ready";
+  marker.visible = false;
+
+  setHUD(
+    "CALIBRATION COMPLETE",
+    "3 possible target locations are saved.\nThe system will randomly choose ONE when the game starts.\nPlayer A will not know which one.\nSqueeze = START 60-second game."
+  );
 }
 
 function addBunny() {
@@ -223,43 +240,33 @@ function addBunny() {
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 16), pink);
   nose.position.set(0, 0.2, 0.082);
 
+  const cheekL = new THREE.Mesh(new THREE.SphereGeometry(0.01, 16, 16), pink);
+  cheekL.scale.set(1.3, 0.65, 0.45);
+  cheekL.position.set(-0.045, 0.19, 0.072);
+  const cheekR = cheekL.clone();
+  cheekR.position.x = 0.045;
+
   const footL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 16, 16), white);
   footL.scale.set(1.35, 0.55, 0.9);
   footL.position.set(-0.038, 0.005, 0.04);
   const footR = footL.clone();
   footR.position.x = 0.038;
 
-  bunny.add(body, head, earL, earR, eyeL, eyeR, nose, footL, footR);
-  bunny.scale.set(0.9, 0.9, 0.9);
+  bunny.add(body, head, earL, earR, eyeL, eyeR, nose, cheekL, cheekR, footL, footR);
+  bunny.scale.set(0.85, 0.85, 0.85);
   bunny.visible = false;
   scene.add(bunny);
 }
 
-function placeTarget() {
-  if (!marker.visible) return;
-  bunny.position.copy(marker.position);
-  faceBunnyToUser();
-  bunny.visible = true;
-  targetPlaced = true;
-
-  setHUD(
-    "TARGET SET",
-    "The bunny position is ready.\nMove the marker and press Trigger to reposition,\nor press Squeeze to start the 60-second mission."
-  );
-}
-
 function startMission() {
-  if (!targetPlaced) {
-    setHUD(
-      "TARGET NOT SET",
-      "Place the bunny target first with Trigger,\nthen press Squeeze to start."
-    );
-    return;
-  }
+  if (targetSlots.length !== REQUIRED_TARGETS) return;
+
+  selectedTargetIndex = Math.floor(Math.random() * targetSlots.length);
+  bunny.position.copy(targetSlots[selectedTargetIndex]);
+  faceBunnyToUser();
+  bunny.visible = false;
 
   mode = "searching";
-  bunny.visible = false;
-  marker.visible = false;
   keypadGroup.visible = false;
   enteredCode = "";
   timeLeft = 60;
@@ -267,7 +274,7 @@ function startMission() {
 
   setHUD(
     "MISSION START",
-    "Player A: find the hidden bunny.\nPlayer B: solve the three maths questions NOW.\nBoth players are active at the same time."
+    "Player A: find the hidden virtual bunny.\nPlayer B: solve the 3 maths questions NOW.\nBoth players are active at the same time."
   );
 }
 
@@ -290,17 +297,17 @@ function updateSearchGame() {
   if (timeLeft <= 10) warning = "\nHURRY — only a few seconds left!";
   else if (timeLeft <= 20) warning = "\nTime is running out.";
 
-  if (distance <= foundDistance) {
+  if (distance <= revealDistance) {
     bunny.visible = true;
     setHUD(
       "BUNNY FOUND!",
-      `Time: ${timeLeft}s\nAim at the bunny and press Trigger to unlock it.\nYou will need Player B's 3-digit code.${warning}`
+      `Time: ${timeLeft}s\nAim at the bunny and press Trigger.\nYou will need Player B's 3-digit code.${warning}`
     );
   } else {
     bunny.visible = false;
     setHUD(
       "PLAYER A — SEARCH",
-      `Time: ${timeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nPlayer B should be solving the code.${warning}`
+      `Time: ${timeLeft}s\nDistance: ${distance.toFixed(2)} m\nDirection: ${direction}\nPlayer B is solving the code.${warning}`
     );
   }
 }
@@ -363,9 +370,7 @@ function trySelectBunny() {
   raycaster.set(origin, direction);
   const hits = raycaster.intersectObject(bunny, true);
 
-  if (hits.length > 0) {
-    openKeypad();
-  }
+  if (hits.length > 0) openKeypad();
 }
 
 function addKeypad() {
@@ -393,14 +398,15 @@ function addKeypad() {
 
 function createKeyButton(label, x, y) {
   const group = new THREE.Group();
-
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 160;
   const ctx = canvas.getContext("2d");
+
   ctx.fillStyle = label === "OK" ? "#3f765e" : label === "CLR" ? "#7c4d57" : "#f6f1e8";
   roundRect(ctx, 4, 4, 248, 152, 22);
   ctx.fill();
+
   ctx.fillStyle = label === "OK" || label === "CLR" ? "#ffffff" : "#172033";
   ctx.font = "bold 62px Arial";
   ctx.textAlign = "center";
@@ -459,7 +465,11 @@ function handleKeypadValue(value) {
     enteredCode = "";
   } else if (value === "OK") {
     if (enteredCode === CORRECT_CODE) {
-      finishGame(true, "MISSION COMPLETE!", "Correct code: 386. Player A and Player B win together.");
+      finishGame(
+        true,
+        "MISSION COMPLETE!",
+        "Correct code: 386. Player A and Player B win together."
+      );
       return;
     }
 
@@ -509,12 +519,12 @@ function faceBunnyToUser() {
 
 function addHUD() {
   const canvas = document.createElement("canvas");
-  canvas.width = 1200;
-  canvas.height = 620;
+  canvas.width = 1000;
+  canvas.height = 480;
 
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-  hudPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.42, 0.74), material);
+  hudPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.50), material);
   hudPanel.userData.canvas = canvas;
   hudPanel.userData.texture = texture;
   scene.add(hudPanel);
@@ -527,25 +537,25 @@ function setHUD(title, body) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = "rgba(20, 28, 42, 0.90)";
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 50);
+  ctx.fillStyle = "rgba(20, 28, 42, 0.88)";
+  roundRect(ctx, 0, 0, canvas.width, canvas.height, 42);
   ctx.fill();
 
   ctx.strokeStyle = "rgba(124,255,178,0.55)";
-  ctx.lineWidth = 8;
-  roundRect(ctx, 7, 7, canvas.width - 14, canvas.height - 14, 45);
+  ctx.lineWidth = 7;
+  roundRect(ctx, 7, 7, canvas.width - 14, canvas.height - 14, 38);
   ctx.stroke();
 
   ctx.fillStyle = "#9fffc3";
-  ctx.font = "bold 63px Arial";
+  ctx.font = "bold 54px Arial";
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  ctx.fillText(title, 50, 105);
+  ctx.fillText(title, 42, 82);
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "39px Arial";
+  ctx.font = "32px Arial";
   body.split("\n").forEach((line, i) => {
-    ctx.fillText(line, 50, 185 + i * 60);
+    ctx.fillText(line, 42, 145 + i * 48);
   });
 
   hudPanel.userData.texture.needsUpdate = true;
@@ -559,9 +569,11 @@ function updateHUDPosition() {
   const camDir = new THREE.Vector3();
   camera.getWorldDirection(camDir);
 
-  const targetPosition = camPos.clone().add(camDir.multiplyScalar(1.35));
-  targetPosition.y += 0.12;
-  hudPanel.position.lerp(targetPosition, 0.22);
+  const targetPosition = camPos.clone().add(camDir.multiplyScalar(1.55));
+  targetPosition.x -= 0.35; // keep HUD slightly left of centre
+  targetPosition.y += 0.20;
+
+  hudPanel.position.lerp(targetPosition, 0.18);
   hudPanel.lookAt(camPos);
 }
 
@@ -571,14 +583,12 @@ function render() {
   if (mode === "searching") updateSearchGame();
   if (mode === "keypad") updateTimer();
 
-  if (triggerDown && mode === "setup") {
-    const held = (performance.now() - triggerStartTime) / 1000;
-    if (held > 0.8) {
-      setHUD(
-        "SETUP",
-        "Release Trigger to set the target.\nPress Squeeze afterwards to start the timed game."
-      );
-    }
+  if (mode === "calibration" && targetSlots.length < REQUIRED_TARGETS) {
+    const step = targetSlots.length + 1;
+    setHUD(
+      `ADMIN CALIBRATION ${step}/${REQUIRED_TARGETS}`,
+      `Aim green marker at real desk location ${step}.\nDepth: ${placementDistance.toFixed(2)} m\nThumbstick up/down = adjust depth.\nTrigger = save location.`
+    );
   }
 
   updateHUDPosition();
